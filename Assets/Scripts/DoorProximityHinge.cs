@@ -32,10 +32,14 @@ public class DoorProximityHinge : MonoBehaviour
     [Tooltip("If true, the first successful key trigger permanently unlocks the door and keeps it open.")]
     [SerializeField] bool m_StayOpenAfterUnlock = false;
 
+    /// <summary>Fired once the first time this door swings open.</summary>
+    public static event System.Action OnDoorOpened;
+
     int m_InsideKeyCount;
     bool m_IsOpen;
     bool m_IsAnimating;
     bool m_IsUnlocked;
+    bool m_HasFiredOpenEvent;
     Coroutine m_Routine;
     Quaternion m_ClosedLocalRotation;
 
@@ -138,6 +142,12 @@ public class DoorProximityHinge : MonoBehaviour
         m_IsOpen = open;
         m_IsAnimating = false;
         m_Routine = null;
+
+        if (open && !m_HasFiredOpenEvent)
+        {
+            m_HasFiredOpenEvent = true;
+            OnDoorOpened?.Invoke();
+        }
     }
 
     void ApplyAngleT(float t)
