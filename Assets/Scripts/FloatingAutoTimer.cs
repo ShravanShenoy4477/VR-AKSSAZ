@@ -31,9 +31,14 @@ public class FloatingAutoTimer : MonoBehaviour
     private bool              isMenuOpen      = false;
     private bool              _timerExpired   = false;
     private int               _hintsUsed      = 0;
+    private float             _initialTimeSeconds;
     private InputAction       toggleAction;
 
-    /// <summary>Fired once when the 10-minute timer reaches zero.</summary>
+    private const float HudForwardDistance = 0.75f;
+    private const float HudLeftOffset      = 0.42f;
+    private const float HudVerticalOffset  = -0.02f;
+
+    /// <summary>Fired once when the 10-second timer reaches zero.</summary>
     public static event System.Action OnTimerExpired;
 
     /// <summary>Seconds remaining on the timer (read by GameCompletionUI for score).</summary>
@@ -46,6 +51,7 @@ public class FloatingAutoTimer : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoStart()
     {
+        if (FindFirstObjectByType<FloatingAutoTimer>() != null) return;
         var obj = new GameObject("[FloatingMenu]");
         DontDestroyOnLoad(obj);
         obj.AddComponent<FloatingAutoTimer>();
@@ -54,9 +60,10 @@ public class FloatingAutoTimer : MonoBehaviour
     private void Awake()
     {
         _instance = this;
+        _initialTimeSeconds = timeRemaining;
         EnsureEventSystem();
         BuildUI();
-        SetupInput();
+        ForceHudVisible();
 
         // Stop the timer when the door is opened (game won)
         DoorProximityHinge.OnDoorOpened += OnGameWon;
@@ -70,9 +77,41 @@ public class FloatingAutoTimer : MonoBehaviour
         DoorProximityHinge.OnDoorOpened -= OnGameWon;
     }
 
+    public void ResetForRestart()
+    {
+        timeRemaining  = _initialTimeSeconds;
+        timerIsRunning = true;
+        _timerExpired  = false;
+        isMenuOpen     = false;
+        _hintsUsed     = 0;
+
+        ForceHudVisible();
+
+        if (hintDisplayText != null)
+        {
+            hintDisplayText.text  = "Press a hint button to reveal a clue.";
+            hintDisplayText.color = new Color(0.70f, 0.88f, 1.00f, 1f);
+        }
+
+        if (hint1Button != null)
+            hint1Button.interactable = true;
+
+        if (hint2Button != null)
+        {
+            hint2Button.interactable = false;
+            ApplyLockedStyle(hint2Button);
+        }
+    }
+
     private void OnGameWon()
     {
         timerIsRunning = false;
+    }
+
+    private void LateUpdate()
+    {
+        if (menuPanel != null && menuPanel.activeSelf)
+            PositionHud();
     }
 
     // ── Input ────────────────────────────────────────────────────────────────
@@ -98,6 +137,24 @@ public class FloatingAutoTimer : MonoBehaviour
             canvas.transform.rotation =
                 Quaternion.Euler(0f, cam.rotation.eulerAngles.y, 0f);
         }
+    }
+
+    private void ForceHudVisible()
+    {
+        isMenuOpen = true;
+        if (menuPanel != null)
+            menuPanel.SetActive(true);
+        PositionHud();
+    }
+
+    private void PositionHud()
+    {
+        if (Camera.main == null || canvas == null) return;
+        Transform cam = Camera.main.transform;
+        canvas.transform.position =
+            cam.position + cam.forward * HudForwardDistance +
+            cam.right * -HudLeftOffset + Vector3.up * HudVerticalOffset;
+        canvas.transform.rotation = Quaternion.Euler(0f, cam.rotation.eulerAngles.y, 0f);
     }
 
     // ── EventSystem ──────────────────────────────────────────────────────────
@@ -140,104 +197,25 @@ public class FloatingAutoTimer : MonoBehaviour
         canvasRT.sizeDelta  = new Vector2(1.6f, 1.0f);
         canvasRT.localScale = Vector3.one;
 
-        // Panel card ─────────────────────────────────────────────────────────
+        // Compact timer-only panel ─────────────────────────────────────────
         menuPanel = MakePanel("MenuPanel", canvasObj.transform,
-            new Vector2(1.40f, 0.88f), Vector2.zero, BgDark);
-        MakeBorderGlow(menuPanel.transform, new Vector2(1.40f, 0.88f), AccentPurple);
+            new Vector2(0.26f, 0.12f), Vector2.zero, BgDark);
+        MakeBorderGlow(menuPanel.transform, new Vector2(0.26f, 0.12f), AccentPurple);
         menuPanel.SetActive(false);
 
-        // Header ─────────────────────────────────────────────────────────────
-        var header = MakePanel("Header", menuPanel.transform,
-            new Vector2(1.40f, 0.16f), new Vector2(0f, 0.36f), HeaderColor);
-
-        MakeLabel("Title", header.transform,
-            "ESCAPE ROOM", 0.075f, FontStyles.Bold, TextPrimary,
-            TextAlignmentOptions.MidlineLeft,
-            new Vector2(0f, 0f), new Vector2(0.55f, 1f),
-            new Vector2(0.065f, 0f), new Vector2(0f, 0f));
-
         var clockObj = new GameObject("Clock");
-        clockObj.transform.SetParent(header.transform, false);
+        clockObj.transform.SetParent(menuPanel.transform, false);
         timeText = clockObj.AddComponent<TextMeshProUGUI>();
         timeText.text      = "10:00";
-        timeText.fontSize  = 0.082f;
+        timeText.fontSize  = 0.10f;
         timeText.fontStyle = FontStyles.Bold;
-        timeText.alignment = TextAlignmentOptions.MidlineRight;
+        timeText.alignment = TextAlignmentOptions.Center;
         timeText.color     = GoldTimer;
         var crt = clockObj.GetComponent<RectTransform>();
-        crt.anchorMin = new Vector2(0.55f, 0f);
-        crt.anchorMax = new Vector2(1.00f, 1f);
+        crt.anchorMin = Vector2.zero;
+        crt.anchorMax = Vector2.one;
         crt.offsetMin = Vector2.zero;
-        crt.offsetMax = new Vector2(-0.055f, 0f);
-
-        // Hint area ──────────────────────────────────────────────────────────
-        var hintArea = MakePanel("HintArea", menuPanel.transform,
-            new Vector2(1.24f, 0.36f), new Vector2(0f, 0.09f), HintAreaBg);
-        MakeBorderGlow(hintArea.transform, new Vector2(1.24f, 0.36f),
-            new Color(0.30f, 0.45f, 0.70f, 0.40f));
-
-        MakeLabel("HintLabel", hintArea.transform,
-            "HINT", 0.05f, FontStyles.Bold, TextDim,
-            TextAlignmentOptions.TopLeft,
-            new Vector2(0f, 1f), new Vector2(1f, 1f),
-            new Vector2(0.055f, -0.52f), new Vector2(-0.055f, 0f));
-
-        var hintTextObj = new GameObject("HintDisplayText");
-        hintTextObj.transform.SetParent(hintArea.transform, false);
-        hintDisplayText = hintTextObj.AddComponent<TextMeshProUGUI>();
-        hintDisplayText.text               = "Press a hint button to reveal a clue.";
-        hintDisplayText.fontSize           = 0.063f;
-        hintDisplayText.alignment          = TextAlignmentOptions.Center;
-        hintDisplayText.color              = new Color(0.70f, 0.88f, 1.00f, 1f);
-        hintDisplayText.enableWordWrapping = true;
-        var hrt = hintTextObj.GetComponent<RectTransform>();
-        hrt.anchorMin = Vector2.zero;
-        hrt.anchorMax = Vector2.one;
-        hrt.offsetMin = new Vector2( 0.055f,  0.03f);
-        hrt.offsetMax = new Vector2(-0.055f, -0.075f);
-
-        // Button row ─────────────────────────────────────────────────────────
-        float btnY = -0.335f;
-
-        hint1Button = MakeButton("Hint1Button", "HINT 1",
-            menuPanel.transform, new Vector2(-0.44f, btnY), 0.38f, 0.12f, AccentTeal);
-
-        hint2Button = MakeButton("Hint2Button", "HINT 2",
-            menuPanel.transform, new Vector2(0.00f, btnY), 0.38f, 0.12f,
-            new Color(0.22f, 0.22f, 0.28f, 1f));
-        hint2Button.interactable = false;
-        ApplyLockedStyle(hint2Button);
-
-        var closeBtn = MakeButton("CloseButton", "CLOSE",
-            menuPanel.transform, new Vector2(0.44f, btnY), 0.38f, 0.12f, AccentRed);
-
-        // Button logic ───────────────────────────────────────────────────────
-        closeBtn.onClick.AddListener(() =>
-        {
-            isMenuOpen = false;
-            menuPanel.SetActive(false);
-        });
-
-        hint1Button.onClick.AddListener(() =>
-        {
-            _hintsUsed++;
-            hintDisplayText.text  = "Not all seats are equal. One hides more than cushions — check beneath the larger one.";
-            hintDisplayText.color = new Color(0.70f, 0.88f, 1.00f, 1f);
-            if (!hint2Button.interactable)
-            {
-                hint2Button.interactable = true;
-                hint2Button.GetComponent<Image>().color = AccentTeal;
-                SetButtonColors(hint2Button, AccentTeal);
-                hint2Button.GetComponentInChildren<TextMeshProUGUI>().color = Color.white;
-            }
-        });
-
-        hint2Button.onClick.AddListener(() =>
-        {
-            _hintsUsed++;
-            hintDisplayText.text  = "The world at your fingertips knows what comes next. Find the globe in the corner and give it a spin.";
-            hintDisplayText.color = new Color(0.70f, 0.88f, 1.00f, 1f);
-        });
+        crt.offsetMax = Vector2.zero;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -378,7 +356,6 @@ public class FloatingAutoTimer : MonoBehaviour
         // Lock the display at 00:00 in red; TimeUpUI handles the full-screen panel
         timeText.text  = "00:00";
         timeText.color = new Color(1f, 0.25f, 0.25f, 1f);
-        if (isMenuOpen) menuPanel.SetActive(false);  // hide HUD so TimeUpUI is unobstructed
 
         OnTimerExpired?.Invoke();
     }

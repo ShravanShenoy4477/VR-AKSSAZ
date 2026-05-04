@@ -8,9 +8,9 @@ using UnityEngine.EventSystems;
 /// <summary>
 /// Full-screen "TIME'S UP" panel shown when FloatingAutoTimer.OnTimerExpired fires.
 ///
-/// Movement is frozen via Time.timeScale = 0.
-/// The Play Again button is detected by direct hand-distance check every Update
-/// (not via VRHandPoker / physics) so it works reliably even with timeScale = 0.
+/// Game logic (puzzle system) is disabled to prevent clue reveals/solving.
+/// Player can still move and interact with physics objects via locomotion providers.
+/// Play Again button uses standard Button component for reliable interaction.
 /// </summary>
 [DisallowMultipleComponent]
 public class TimeUpUI : MonoBehaviour
@@ -26,28 +26,13 @@ public class TimeUpUI : MonoBehaviour
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Canvas    _canvas;
     private GameObject _panel;
-    private Transform  _restartBtnTransform;   // world position used for proximity
-    private Image      _restartBtnImage;        // tinted on hover
-
-    // Hand transforms — found by name in Start
-    private Transform _rightHand;
-    private Transform _leftHand;
-
-    // Prevents firing Restart more than once
-    private bool _restarting = false;
-
-    // Hover tint state
-    private bool  _wasHovering    = false;
-    private Color _btnNormalColor = new Color(0.10f, 0.62f, 0.68f, 1.00f);
-
-    // How close a hand must be to the button centre to trigger it (metres)
-    private const float TouchRadius = 0.07f;
+    private Button     _playAgainButton;
 
     // ── Bootstrap ─────────────────────────────────────────────────────────────
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoStart()
     {
-        if (FindObjectOfType<TimeUpUI>() != null) return;
+        if (FindFirstObjectByType<TimeUpUI>() != null) return;
         var go = new GameObject("[TimeUpUI]");
         DontDestroyOnLoad(go);
         go.AddComponent<TimeUpUI>();
@@ -61,11 +46,12 @@ public class TimeUpUI : MonoBehaviour
 
     private void Start()
     {
-        // Find hand controllers — same names used everywhere in the project
-        var r = GameObject.Find("RightHandController");
-        var l = GameObject.Find("LeftHandController");
-        if (r != null) _rightHand = r.transform;
-        if (l != null) _leftHand  = l.transform;
+        // Hand finding not needed anymore — Button component handles interaction
+    }
+
+    private void Update()
+    {
+        // No failsafe needed — just let Button component handle it
     }
 
     private void OnDestroy()
@@ -73,50 +59,26 @@ public class TimeUpUI : MonoBehaviour
         FloatingAutoTimer.OnTimerExpired -= Show;
     }
 
-    // ── Update — hand proximity check (runs even with timeScale = 0) ──────────
-    private void Update()
-    {
-        if (_panel == null || !_panel.activeSelf || _restarting) return;
-        if (_restartBtnTransform == null) return;
-
-        bool hovering = IsHandNear(_restartBtnTransform.position);
-
-        // Visual hover tint
-        if (hovering != _wasHovering)
-        {
-            if (_restartBtnImage != null)
-                _restartBtnImage.color = hovering
-                    ? Color.Lerp(_btnNormalColor, Color.white, 0.35f)
-                    : _btnNormalColor;
-            _wasHovering = hovering;
-        }
-
-        // Rising edge — fire once when hand first enters the button
-        if (hovering)
-            Restart();
-    }
-
-    private bool IsHandNear(Vector3 worldPos)
-    {
-        if (_rightHand != null &&
-            Vector3.Distance(_rightHand.position, worldPos) < TouchRadius) return true;
-        if (_leftHand  != null &&
-            Vector3.Distance(_leftHand.position,  worldPos) < TouchRadius) return true;
-        return false;
-    }
-
     // ── Show ──────────────────────────────────────────────────────────────────
     private void Show()
     {
-        _restarting = false;
-        _wasHovering = false;
         RefreshStats();
         _panel.SetActive(true);
         PositionInFrontOfCamera();
 
-        // Freeze movement — locomotion providers use Time.deltaTime → they stop.
-        // XR head/hand tracking is driven by the XR subsystem, unaffected by timeScale.
-        Time.timeScale = 0f;
+        // Disable puzzle manager to stop game logic (clue reveals, key reveal, light, etc.)
+        // But leave locomotion and physics enabled so player can still move and interact
+        var pm = FindFirstObjectByType<PuzzleManager>();
+        if (pm != null)
+            pm.enabled = false;
+
+        // Disable FloatingAutoTimer to stop other countdown-related logic
+        var timer = FindFirstObjectByType<FloatingAutoTimer>();
+        if (timer != null)
+            timer.enabled = false;
+
+        // Disable button interaction so "Play Again" is only option
+        _playAgainButton.interactable = true;
     }
 
     private void PositionInFrontOfCamera()
@@ -133,15 +95,6 @@ public class TimeUpUI : MonoBehaviour
     {
         if (_panel != null && _panel.activeSelf)
             PositionInFrontOfCamera();
-    }
-
-    // ── Restart ───────────────────────────────────────────────────────────────
-    private void Restart()
-    {
-        if (_restarting) return;
-        _restarting    = true;
-        Time.timeScale = 1f;
-        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     // ── Stats ─────────────────────────────────────────────────────────────────
@@ -216,29 +169,25 @@ public class TimeUpUI : MonoBehaviour
             new Color(0.80f, 0.80f, 0.95f, 0.85f), TextAlignmentOptions.Center,
             new Vector2(0.62f, 0.06f), new Vector2(0f, -0.135f));
 
-        // Play Again button — no BoxCollider needed, proximity handled in Update
-        var btnObj = new GameObject("PlayAgainButton");
-        btnObj.transform.SetParent(_panel.transform, false);
-        _restartBtnImage       = btnObj.AddComponent<Image>();
-        _restartBtnImage.color = _btnNormalColor;
-        var brt = btnObj.GetComponent<RectTransform>();
-        brt.anchorMin = brt.anchorMax = brt.pivot = new Vector2(0.5f, 0.5f);
-        brt.sizeDelta        = new Vector2(0.28f, 0.08f);
-        brt.anchoredPosition = new Vector2(0f, -0.220f);
-        _restartBtnTransform = btnObj.transform;
+        // Play Again button — uses standard Button component for reliable interaction
+        _playAgainButton = MakeButton("PlayAgainButton", "PLAY AGAIN",
+            _panel.transform, new Vector2(0f, -0.220f), 0.28f, 0.08f, AccentTeal);
 
-        var lblObj = new GameObject("Label");
-        lblObj.transform.SetParent(btnObj.transform, false);
-        var lbl       = lblObj.AddComponent<TextMeshProUGUI>();
-        lbl.text      = "PLAY AGAIN";
-        lbl.alignment = TextAlignmentOptions.Center;
-        lbl.fontStyle = FontStyles.Bold;
-        lbl.fontSize  = 0.08f * 0.42f;
-        lbl.color     = Color.white;
-        var lrt       = lblObj.GetComponent<RectTransform>();
-        lrt.anchorMin = Vector2.zero;
-        lrt.anchorMax = Vector2.one;
-        lrt.sizeDelta = Vector2.zero;
+        _playAgainButton.onClick.AddListener(() =>
+        {
+            if (_panel != null)
+                _panel.SetActive(false);
+            if (_playAgainButton != null)
+                _playAgainButton.interactable = false;
+            var timer = FindFirstObjectByType<FloatingAutoTimer>();
+            if (timer != null)
+            {
+                timer.enabled = true;
+                timer.ResetForRestart();
+            }
+            Debug.Log("[TimeUpUI] Play Again clicked — reloading scene");
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -280,7 +229,7 @@ public class TimeUpUI : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.alignment          = align;
         tmp.color              = color;
-        tmp.enableWordWrapping = true;
+        tmp.textWrappingMode   = TextWrappingModes.Normal;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = sizeDelta;
@@ -293,5 +242,47 @@ public class TimeUpUI : MonoBehaviour
         var es = new GameObject("EventSystem");
         es.AddComponent<EventSystem>();
         es.AddComponent<StandaloneInputModule>();
+    }
+
+    private static Button MakeButton(string name, string label,
+        Transform parent, Vector2 pos, float w, float h, Color color)
+    {
+        var btnObj = new GameObject(name);
+        btnObj.transform.SetParent(parent, false);
+        var img   = btnObj.AddComponent<Image>();
+        img.color = color;
+        var btn   = btnObj.AddComponent<Button>();
+
+        var cb              = btn.colors;
+        cb.normalColor      = color;
+        cb.highlightedColor = Color.Lerp(color, Color.white, 0.30f);
+        cb.pressedColor     = Color.Lerp(color, Color.black, 0.30f);
+        cb.selectedColor    = cb.highlightedColor;
+        btn.colors          = cb;
+
+        var rt = btnObj.GetComponent<RectTransform>();
+        rt.sizeDelta        = new Vector2(w, h);
+        rt.anchoredPosition = pos;
+
+        // Label
+        var textObj = new GameObject("Label");
+        textObj.transform.SetParent(btnObj.transform, false);
+        var tmp       = textObj.AddComponent<TextMeshProUGUI>();
+        tmp.text      = label;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.fontStyle = FontStyles.Bold;
+        tmp.fontSize  = h * 0.42f;
+        tmp.color     = Color.white;
+        var trt       = textObj.GetComponent<RectTransform>();
+        trt.anchorMin = Vector2.zero;
+        trt.anchorMax = Vector2.one;
+        trt.sizeDelta = Vector2.zero;
+
+        // BoxCollider so VRHandPoker's OverlapSphere can detect it
+        var box       = btnObj.AddComponent<BoxCollider>();
+        box.isTrigger = true;
+        box.size      = new Vector3(w, h, 0.08f);
+
+        return btn;
     }
 }

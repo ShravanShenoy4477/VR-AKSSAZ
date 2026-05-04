@@ -9,13 +9,14 @@ using TMPro;
 /// Singleton that wires together the full puzzle chain.
 ///
 /// Responsibilities:
-///   - Hides the key at game start (finds it by name or tag "Key").
+///   - Hides the key at game start (uses an Inspector-assigned key object).
 ///   - Listens to OnClueSolved from ClueNote, ProximityClueNote, GlobeClueReveal.
 ///   - Shows a "Clue X/3 Solved" progress toast after each real clue.
 ///   - Reveals the key and shows "KEY REVEALED!" when all 3 clues are solved.
 ///   - Resets correctly when the scene is reloaded (Play Again).
 ///
-/// No scene setup needed — bootstraps itself at runtime.
+/// Setup: Attach this script to an empty GameObject named "PuzzleManager" in the scene.
+/// Do NOT delete it from the scene — it subscribes to clue events in Awake().
 /// </summary>
 [DisallowMultipleComponent]
 public class PuzzleManager : MonoBehaviour
@@ -24,15 +25,18 @@ public class PuzzleManager : MonoBehaviour
     /// <summary>Clue indices that must all be solved before the key is revealed.</summary>
     private static readonly int[] RequiredClues = { 1, 2, 3 };
 
-    [Tooltip("Exact name of the key GameObject. Falls back to tag 'Key' if not found.")]
-    public string keyObjectName = "TableProp_Keys";
+    [Tooltip("Drag the key GameObject here. It will be hidden at start and revealed after all clues.")]
+    public GameObject keyObject;
+
+    [Tooltip("Light that will be enabled when all 3 clues are revealed.")]
+    public Light revealLight;
 
     // ── Events ────────────────────────────────────────────────────────────────
     /// <summary>Fired when all required clues are solved and the key is revealed.</summary>
     public static event System.Action OnPuzzleComplete;
 
-    /// <summary>Number of required clues the player has solved so far.</summary>
-    public static int SolvedClueCount => _instance != null ? _instance._solvedClues.Count : 0;
+    /// <summary>Number of required clue completion events received so far.</summary>
+    public static int SolvedClueCount => _instance != null ? _instance._solvedClueEventCount : 0;
 
     // ── Colours ───────────────────────────────────────────────────────────────
     static readonly Color BgDark      = new Color(0.07f, 0.08f, 0.13f, 0.95f);
@@ -45,6 +49,7 @@ public class PuzzleManager : MonoBehaviour
     private static PuzzleManager _instance;
 
     private readonly HashSet<int> _solvedClues = new HashSet<int>();
+    private int    _solvedClueEventCount = 0;
     private bool       _puzzleComplete = false;
     private GameObject _keyObject;
 
@@ -56,21 +61,15 @@ public class PuzzleManager : MonoBehaviour
     private TextMeshProUGUI _bodyText;
     private Coroutine       _dismissRoutine;
 
-    // ── Bootstrap ─────────────────────────────────────────────────────────────
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    static void AutoStart()
-    {
-        // Prevent duplicates on Play Again (scene reload)
-        if (FindObjectOfType<PuzzleManager>() != null) return;
-
-        var go = new GameObject("[PuzzleManager]");
-        DontDestroyOnLoad(go);
-        go.AddComponent<PuzzleManager>();
-    }
-
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void Awake()
     {
+        if (_instance != null && _instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
         _instance = this;
         ClueNote.OnClueSolved          += HandleClueSolved;
         ProximityClueNote.OnClueSolved += HandleClueSolved;
@@ -100,9 +99,14 @@ public class PuzzleManager : MonoBehaviour
     void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         _solvedClues.Clear();
+        _solvedClueEventCount = 0;
         _puzzleComplete = false;
         _keyObject      = null;
         if (_notifPanel != null) _notifPanel.SetActive(false);
+
+        // Disable the reveal light when scene reloads
+        if (revealLight != null)
+            revealLight.enabled = false;
 
         // Wait one frame so all scene objects exist before searching for the key
         StartCoroutine(HideKeyNextFrame());
@@ -117,35 +121,47 @@ public class PuzzleManager : MonoBehaviour
     // ── Key management ────────────────────────────────────────────────────────
     void FindAndHideKey()
     {
-        _keyObject = GameObject.Find(keyObjectName);
-        if (_keyObject == null)
-            _keyObject = GameObject.FindWithTag("Key");
-
-        if (_keyObject != null)
+        if (keyObject != null)
         {
-            _keyObject.SetActive(false);
-            Debug.Log($"[PuzzleManager] Key '{_keyObject.name}' hidden.");
+            keyObject.SetActive(false);
+            Debug.Log($"[PuzzleManager] Key '{keyObject.name}' hidden.");
         }
         else
         {
-            Debug.LogWarning($"[PuzzleManager] Key '{keyObjectName}' not found. " +
-                             "Name it exactly or add the 'Key' tag.");
+            Debug.LogWarning("[PuzzleManager] Assign the key GameObject to the 'Key Object' field.");
         }
     }
 
     void RevealKey()
     {
-        // Re-search in case scene reloaded
-        if (_keyObject == null)
+        if (keyObject != null)
         {
-            _keyObject = GameObject.Find(keyObjectName);
-            if (_keyObject == null) _keyObject = GameObject.FindWithTag("Key");
+            keyObject.SetActive(true);
+            Debug.Log("[PuzzleManager] Key revealed!");
+        }
+        else
+        {
+            Debug.LogWarning("[PuzzleManager] Cannot reveal key because 'Key Object' is not assigned.");
         }
 
-        if (_keyObject != null)
+        // Enable the reveal light (defensive)
+        if (revealLight != null)
         {
-            _keyObject.SetActive(true);
-            Debug.Log("[PuzzleManager] Key revealed!");
+            Debug.Log($"[PuzzleManager] RevealLight BEFORE: name={revealLight.name}, activeInHierarchy={revealLight.gameObject.activeInHierarchy}, enabled={revealLight.enabled}, intensity={revealLight.intensity}");
+            if (!revealLight.gameObject.activeInHierarchy)
+            {
+                revealLight.gameObject.SetActive(true);
+                Debug.Log("[PuzzleManager] RevealLight GameObject was inactive; activated.");
+            }
+            // Ensure component enabled and visible
+            revealLight.enabled = true;
+            if (revealLight.intensity <= 0f)
+            {
+                revealLight.intensity = 1f;
+                Debug.Log("[PuzzleManager] RevealLight intensity was 0; set to 1.");
+            }
+            Debug.Log($"[PuzzleManager] RevealLight AFTER: activeInHierarchy={revealLight.gameObject.activeInHierarchy}, enabled={revealLight.enabled}, intensity={revealLight.intensity}");
+            Debug.Log("[PuzzleManager] Reveal light enabled!");
         }
     }
 
@@ -154,12 +170,18 @@ public class PuzzleManager : MonoBehaviour
     {
         if (_puzzleComplete) return;
 
+        _solvedClueEventCount++;
         _solvedClues.Add(clueIndex);
 
+        if (_solvedClues.Count != _solvedClueEventCount)
+        {
+            Debug.LogWarning(
+                $"[PuzzleManager] Clue event count {_solvedClueEventCount} differs from unique clue indices {_solvedClues.Count}. " +
+                $"Incoming clueIndex={clueIndex}. Completion will use the event count so the puzzle can still finish.");
+        }
+
         // Count how many of the required clues are done
-        int solved = 0;
-        foreach (int req in RequiredClues)
-            if (_solvedClues.Contains(req)) solved++;
+        int solved = Mathf.Min(_solvedClueEventCount, RequiredClues.Length);
 
         if (solved < RequiredClues.Length)
         {
@@ -173,11 +195,12 @@ public class PuzzleManager : MonoBehaviour
 
         // All required clues solved
         _puzzleComplete = true;
-        RevealKey();
         ShowNotification(
             "KEY REVEALED!",
             "All clues solved.\nFind the key and escape!",
             AccentGreen, autoDismissSeconds: 7f);
+        RevealKey();
+        
         OnPuzzleComplete?.Invoke();
     }
 
@@ -275,7 +298,7 @@ public class PuzzleManager : MonoBehaviour
         _titleText.fontStyle       = FontStyles.Bold;
         _titleText.color           = AccentGold;
         _titleText.alignment       = TextAlignmentOptions.Center;
-        _titleText.enableWordWrapping = false;
+        _titleText.textWrappingMode = TextWrappingModes.NoWrap;
         var trt = titleObj.GetComponent<RectTransform>();
         trt.anchorMin = trt.anchorMax = trt.pivot = new Vector2(0.5f, 0.5f);
         trt.sizeDelta        = new Vector2(0.64f, 0.070f);
@@ -289,7 +312,7 @@ public class PuzzleManager : MonoBehaviour
         _bodyText.fontSize        = 0.030f;
         _bodyText.color           = TextPrimary;
         _bodyText.alignment       = TextAlignmentOptions.Center;
-        _bodyText.enableWordWrapping = true;
+        _bodyText.textWrappingMode = TextWrappingModes.Normal;
         var bort = bodyObj.GetComponent<RectTransform>();
         bort.anchorMin = bort.anchorMax = bort.pivot = new Vector2(0.5f, 0.5f);
         bort.sizeDelta        = new Vector2(0.64f, 0.090f);
