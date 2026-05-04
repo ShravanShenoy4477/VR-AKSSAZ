@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class FloatingAutoTimer : MonoBehaviour
 {
@@ -67,6 +68,9 @@ public class FloatingAutoTimer : MonoBehaviour
 
         // Stop the timer when the door is opened (game won)
         DoorProximityHinge.OnDoorOpened += OnGameWon;
+
+        // Listen for scene reloads to reset timer state
+        SceneManager.sceneLoaded += OnSceneLoaded;
     }
 
     private void OnDestroy()
@@ -75,6 +79,14 @@ public class FloatingAutoTimer : MonoBehaviour
         toggleAction?.Disable();
         toggleAction?.Dispose();
         DoorProximityHinge.OnDoorOpened -= OnGameWon;
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        // Reset timer state when a scene loads (or reloads on Play Again)
+        ResetForRestart();
+        Debug.Log("[FloatingAutoTimer] Scene reloaded — timer reset and restarted.");
     }
 
     public void ResetForRestart()

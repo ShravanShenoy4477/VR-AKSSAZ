@@ -26,6 +26,11 @@ public class GameCompletionUI : MonoBehaviour
     private TextMeshProUGUI  _scoreLine;
     private TextMeshProUGUI  _breakdownLine;
 
+    [Header("Placement")]
+    [SerializeField] private bool useFixedWorldTransform = false;
+    [SerializeField] private Vector3 fixedWorldPosition = new Vector3(-5.857f, 1.468f, -3.285f);
+    [SerializeField] private Vector3 fixedWorldRotation = new Vector3(0f, 0f, -90f);
+
     // ── Bootstrap ─────────────────────────────────────────────────────────
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoStart()
@@ -67,7 +72,12 @@ public class GameCompletionUI : MonoBehaviour
 
         _panel.SetActive(true);
 
-        if (Camera.main != null)
+        if (useFixedWorldTransform)
+        {
+            _canvas.transform.position = fixedWorldPosition;
+            _canvas.transform.rotation = Quaternion.Euler(fixedWorldRotation);
+        }
+        else if (Camera.main != null)
         {
             Transform cam = Camera.main.transform;
             _canvas.transform.position =
@@ -157,7 +167,7 @@ public class GameCompletionUI : MonoBehaviour
         _breakdownLine.fontSize        = 0.036f;
         _breakdownLine.color           = new Color(0.70f, 0.88f, 1.00f, 0.85f);
         _breakdownLine.alignment       = TextAlignmentOptions.Center;
-        _breakdownLine.enableWordWrapping = false;
+        _breakdownLine.textWrappingMode = TextWrappingModes.NoWrap;
         var brt2 = bdObj.GetComponent<RectTransform>();
         brt2.anchorMin = brt2.anchorMax = brt2.pivot = new Vector2(0.5f, 0.5f);
         brt2.sizeDelta        = new Vector2(1.20f, 0.06f);
@@ -215,7 +225,7 @@ public class GameCompletionUI : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.alignment          = align;
         tmp.color              = color;
-        tmp.enableWordWrapping = true;
+        tmp.textWrappingMode    = TextWrappingModes.Normal;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin           = new Vector2(0.5f, 0.5f);
         rt.anchorMax           = new Vector2(0.5f, 0.5f);
