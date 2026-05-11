@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
@@ -43,6 +44,9 @@ public class CategoryInteractionExtender : MonoBehaviour
             if (t == null) continue;
             var go = t.gameObject;
             var n = go.name.ToLowerInvariant();
+
+            if (TryApplyExplicitIrrelevantClutter(go, n))
+                continue;
 
             if (n.Contains("sofa") || n.Contains("couch") || n.Contains("armchair"))
             {
@@ -152,6 +156,69 @@ public class CategoryInteractionExtender : MonoBehaviour
             || go.GetComponentInParent<DecoyTelescopeReveal>() != null
             || go.GetComponentInParent<DoorProximityHinge>() != null
             || go.GetComponentInParent<SageLight>() != null;
+    }
+
+    static bool TryApplyExplicitIrrelevantClutter(GameObject go, string lowerName)
+    {
+        if (go == null || string.IsNullOrEmpty(lowerName)) return false;
+
+        bool match =
+            lowerName.Equals("telescope (1)", StringComparison.Ordinal)
+            || lowerName.Equals("cornertable_w11_w17 (1)", StringComparison.Ordinal)
+            || lowerName.Equals("globe (1)", StringComparison.Ordinal)
+            || lowerName.Equals("armchair_wall9_right (1)", StringComparison.Ordinal)
+            || lowerName.Equals("coat hanger (1)", StringComparison.Ordinal);
+        if (!match) return false;
+
+        // Force these explicit clutter instances to stay irrelevant:
+        // no clue/decoy scripts, no progression hooks.
+        RemoveIfPresent<DecoyGlobeReveal>(go);
+        RemoveIfPresent<DecoyTelescopeReveal>(go);
+        RemoveIfPresent<GlobeClueReveal>(go);
+        RemoveIfPresent<ProximityClueNote>(go);
+        RemoveIfPresent<ClueNote>(go);
+        RemoveIfPresent<SofaProximitySlide>(go);
+
+        var ambient = go.GetComponent<AmbientCategoryInteractable>();
+        if (ambient == null)
+            ambient = go.AddComponent<AmbientCategoryInteractable>();
+
+        if (lowerName.Equals("globe (1)", StringComparison.Ordinal))
+        {
+            ambient.Configure(AmbientCategoryInteractable.MotionKind.Spin, Vector3.up, 30f, 0f);
+            ambient.ConfigureInteraction(0.68f, 0.34f);
+        }
+        else if (lowerName.Equals("telescope (1)", StringComparison.Ordinal))
+        {
+            ambient.Configure(AmbientCategoryInteractable.MotionKind.Tilt, Vector3.right, 16f, 0f);
+            ambient.ConfigureInteraction(0.72f, 0.34f);
+        }
+        else if (lowerName.Equals("armchair_wall9_right (1)", StringComparison.Ordinal))
+        {
+            Destroy(ambient);
+            var slide = go.GetComponent<SofaProximitySlide>();
+            if (slide == null)
+                slide = go.AddComponent<SofaProximitySlide>();
+            slide.ApplyReferenceTemplate();
+        }
+        else if (lowerName.Equals("cornertable_w11_w17 (1)", StringComparison.Ordinal))
+        {
+            ambient.Configure(AmbientCategoryInteractable.MotionKind.Nudge, Vector3.up, 0f, 0f);
+            ambient.ConfigureInteraction(0.60f, 0.26f);
+        }
+        else // coat hanger (1)
+        {
+            ambient.Configure(AmbientCategoryInteractable.MotionKind.Tilt, Vector3.forward, 10f, 0f);
+            ambient.ConfigureInteraction(0.62f, 0.28f);
+        }
+
+        return true;
+    }
+
+    static void RemoveIfPresent<T>(GameObject go) where T : Component
+    {
+        var c = go.GetComponent<T>();
+        if (c != null) Destroy(c);
     }
 
     static bool IsTopmostCategoryObject(Transform t, params string[] tokens)

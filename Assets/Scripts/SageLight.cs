@@ -46,6 +46,10 @@ public class SageLight : MonoBehaviour
     public int randomFillCount = 3;
     public Bounds randomFillBounds = new Bounds(new Vector3(4.5f, -0.4f, -2f), new Vector3(10f, 3.5f, 12f));
     public int randomSeed = 538;
+    [Header("Runtime misdirect lights (irrelevant clutter subset)")]
+    [Tooltip("Extra focused lights on a subset of explicitly irrelevant clutter instances to add misdirection.")]
+    public bool lightIrrelevantClutterSubset = true;
+    [Range(0, 5)] public int irrelevantClutterSubsetCount = 3;
 
     [Header("Look — focused highlights")]
     [Tooltip("Intensity for assigned spot/additional lights and base for runtime fill points.")]
@@ -274,6 +278,47 @@ public class SageLight : MonoBehaviour
             if (spawnSpotFillsOnInteractableTargets)
                 AddRuntimeSpotAimedAt(rng, pos + spotAimWorldOffset);
         }
+
+        AddIrrelevantClutterSubsetLights(rng);
+    }
+
+    void AddIrrelevantClutterSubsetLights(System.Random rng)
+    {
+        if (!lightIrrelevantClutterSubset || irrelevantClutterSubsetCount <= 0)
+            return;
+
+        var candidates = new List<Transform>(12);
+        foreach (var t in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (t == null) continue;
+            if (!IsIrrelevantClutterMisdirectTarget(t.name)) continue;
+            candidates.Add(t);
+        }
+        if (candidates.Count == 0) return;
+
+        int picks = Mathf.Min(irrelevantClutterSubsetCount, candidates.Count);
+        for (int i = 0; i < picks; i++)
+        {
+            int idx = rng.Next(candidates.Count);
+            var chosen = candidates[idx];
+            candidates.RemoveAt(idx);
+            if (chosen == null) continue;
+
+            var pos = chosen.position + clueLightWorldOffset;
+            AddRuntimePoint(pos);
+            if (spawnSpotFillsOnInteractableTargets)
+                AddRuntimeSpotAimedAt(rng, pos + spotAimWorldOffset);
+        }
+    }
+
+    static bool IsIrrelevantClutterMisdirectTarget(string objectName)
+    {
+        if (string.IsNullOrEmpty(objectName)) return false;
+        return objectName == "Telescope (1)"
+            || objectName == "CornerTable_W11_W17 (1)"
+            || objectName == "Globe (1)"
+            || objectName == "Armchair_Wall9_Right (1)"
+            || objectName == "Coat Hanger (1)";
     }
 
     void SpawnRandomFillLights(System.Random rng)

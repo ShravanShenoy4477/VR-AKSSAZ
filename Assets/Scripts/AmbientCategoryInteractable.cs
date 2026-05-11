@@ -24,6 +24,13 @@ public class AmbientCategoryInteractable : MonoBehaviour
     Vector3 _basePos;
     Quaternion _baseRot;
     Coroutine _routine;
+    Collider[] _colliders;
+    bool[] _colliderTriggerDefaults;
+    Rigidbody _rb;
+    bool _rbKinematicDefault;
+    bool _rbDetectCollisionsDefault;
+    Bounds _interactionBounds;
+    bool _hasInteractionBounds;
 
     void Awake()
     {
@@ -36,6 +43,8 @@ public class AmbientCategoryInteractable : MonoBehaviour
         if (l != null) _left = l.transform;
 
         EnsureCollider();
+        CachePhysicsState();
+        CacheInteractionBounds();
     }
 
     void EnsureCollider()
@@ -53,6 +62,68 @@ public class AmbientCategoryInteractable : MonoBehaviour
             Mathf.Max(0.06f, b.size.z));
     }
 
+    void CachePhysicsState()
+    {
+        _colliders = GetComponentsInChildren<Collider>(true);
+        _colliderTriggerDefaults = new bool[_colliders.Length];
+        for (int i = 0; i < _colliders.Length; i++)
+            _colliderTriggerDefaults[i] = _colliders[i] != null && _colliders[i].isTrigger;
+
+        _rb = GetComponent<Rigidbody>();
+        if (_rb == null) _rb = GetComponentInChildren<Rigidbody>();
+        if (_rb != null)
+        {
+            _rbKinematicDefault = _rb.isKinematic;
+            _rbDetectCollisionsDefault = _rb.detectCollisions;
+        }
+    }
+
+    void CacheInteractionBounds()
+    {
+        var renderers = GetComponentsInChildren<Renderer>(true);
+        if (renderers == null || renderers.Length == 0)
+        {
+            _hasInteractionBounds = false;
+            return;
+        }
+
+        bool found = false;
+        Bounds b = default;
+        foreach (var r in renderers)
+        {
+            if (r == null) continue;
+            if (!found) { b = r.bounds; found = true; }
+            else b.Encapsulate(r.bounds);
+        }
+
+        _hasInteractionBounds = found;
+        if (!found) return;
+        b.Expand(0.16f);
+        b.center += Vector3.up * (b.extents.y * 0.15f);
+        _interactionBounds = b;
+    }
+
+    void SetInteractionCollisionMode(bool interactionActive)
+    {
+        if (_colliders != null && _colliderTriggerDefaults != null)
+        {
+            for (int i = 0; i < _colliders.Length; i++)
+            {
+                var c = _colliders[i];
+                if (c == null) continue;
+                c.isTrigger = interactionActive ? true : _colliderTriggerDefaults[i];
+            }
+        }
+
+        if (_rb != null)
+        {
+            _rb.linearVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+            _rb.isKinematic = interactionActive ? true : _rbKinematicDefault;
+            _rb.detectCollisions = interactionActive ? false : _rbDetectCollisionsDefault;
+        }
+    }
+
     void Update()
     {
         if (_busy) return;
@@ -61,8 +132,8 @@ public class AmbientCategoryInteractable : MonoBehaviour
         bool edgeL = ReadEdge(XRNode.LeftHand, ref _prevL);
         if (!edgeR && !edgeL) return;
 
-        bool nearR = _right != null && Vector3.Distance(_right.position, transform.position) <= interactRadius;
-        bool nearL = _left != null && Vector3.Distance(_left.position, transform.position) <= interactRadius;
+        bool nearR = _right != null && DistanceToInteractable(_right.position) <= interactRadius;
+        bool nearL = _left != null && DistanceToInteractable(_left.position) <= interactRadius;
         bool tryR = edgeR && nearR;
         bool tryL = edgeL && nearL;
         if (!(tryR || tryL)) return;
@@ -80,17 +151,24 @@ public class AmbientCategoryInteractable : MonoBehaviour
 
     bool IsNearestForPoint(Vector3 handPos)
     {
-        float mine = Vector3.Distance(handPos, transform.position);
+        float mine = DistanceToInteractable(handPos);
         if (mine > interactRadius) return false;
 
         foreach (var other in FindObjectsByType<AmbientCategoryInteractable>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
         {
             if (other == null || other == this || !other.isActiveAndEnabled) continue;
-            float d = Vector3.Distance(handPos, other.transform.position);
+            float d = other.DistanceToInteractable(handPos);
             if (d + 0.01f < mine && d <= interactRadius)
                 return false;
         }
         return true;
+    }
+
+    float DistanceToInteractable(Vector3 point)
+    {
+        if (_hasInteractionBounds)
+            return Vector3.Distance(_interactionBounds.ClosestPoint(point), point);
+        return Vector3.Distance(point, transform.position);
     }
 
     bool ReadEdge(XRNode node, ref bool prev)
@@ -112,6 +190,7 @@ public class AmbientCategoryInteractable : MonoBehaviour
     IEnumerator AnimatePreview()
     {
         _busy = true;
+        SetInteractionCollisionMode(true);
         float dur = Mathf.Max(0.12f, motionDuration);
 
         Vector3 fromPos = transform.localPosition;
@@ -159,6 +238,7 @@ public class AmbientCategoryInteractable : MonoBehaviour
 
         transform.localPosition = _basePos;
         transform.localRotation = _baseRot;
+        SetInteractionCollisionMode(false);
         _busy = false;
         _routine = null;
     }
@@ -169,5 +249,11 @@ public class AmbientCategoryInteractable : MonoBehaviour
         localAxis = axis.sqrMagnitude > 0.0001f ? axis.normalized : Vector3.up;
         angleDegrees = angle;
         slideDistance = distance;
+    }
+
+    public void ConfigureInteraction(float radius, float duration)
+    {
+        interactRadius = Mathf.Max(0.2f, radius);
+        motionDuration = Mathf.Max(0.12f, duration);
     }
 }
