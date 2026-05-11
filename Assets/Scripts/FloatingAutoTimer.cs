@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -26,6 +27,10 @@ public class FloatingAutoTimer : MonoBehaviour
     private TextMeshProUGUI   scoreLineText;
     private Button            hint1Button;
     private Button            hint2Button;
+    private Canvas            alertCanvas;
+    private GameObject        alertPanel;
+    private TextMeshProUGUI   alertText;
+    private Coroutine         alertRoutine;
     private bool              timerIsRunning  = true;
     private float             timeRemaining   = 600f;
     private bool              _timerExpired   = false;
@@ -41,6 +46,15 @@ public class FloatingAutoTimer : MonoBehaviour
     [SerializeField] float hudUpMeters = -0.04f;
     [Tooltip("Log when HUD is shown (paste Console if it clips).")]
     [SerializeField] bool debugHudPlacement;
+    [Header("Timer alerts (independent of HUD visibility)")]
+    [SerializeField] float alertForwardMeters = 0.58f;
+    [SerializeField] float alertUpMeters = 0.12f;
+    [SerializeField] float alertDurationSeconds = 2.2f;
+    [SerializeField] float finalCountdownAlertDurationSeconds = 0.95f;
+    bool _alertedOneMinuteElapsed;
+    bool _alertedFiveMinutesLeft;
+    bool _alertedOneMinuteLeft;
+    int _lastFinalSecondsAlert = -1;
 
     public static event System.Action OnTimerExpired;
 
@@ -64,6 +78,7 @@ public class FloatingAutoTimer : MonoBehaviour
         _hudPanelVisible    = false;
         EnsureEventSystem();
         BuildUI();
+        BuildAlertUI();
         ApplyHudPanelVisibility();
 
         DoorProximityHinge.OnDoorOpened += OnGameWon;
@@ -88,14 +103,19 @@ public class FloatingAutoTimer : MonoBehaviour
         timerIsRunning = true;
         _timerExpired  = false;
         _hintsUsed     = 0;
+        _alertedOneMinuteElapsed = false;
+        _alertedFiveMinutesLeft = false;
+        _alertedOneMinuteLeft = false;
+        _lastFinalSecondsAlert = -1;
 
         _hudPanelVisible = false;
         ApplyHudPanelVisibility();
+        if (alertPanel != null) alertPanel.SetActive(false);
 
         if (hintDisplayText != null)
         {
             hintDisplayText.text =
-                "Hints: use sparingly. They may narrow location but can still lead through decoys.\nUse <b>grip</b> inside Hint 1 / Hint 2, or laser + trigger. Press <b>left Y</b> to show or hide this HUD (H in Editor).";
+                "Hints adapt to your current progress.\nUse <b>grip</b> inside Hint 1 / Hint 2, or laser + trigger.\nPress <b>left Y</b> to show or hide this HUD (H in Editor).";
             hintDisplayText.color = MenuThemes.Hud.TextSecondary;
         }
 
@@ -135,6 +155,76 @@ public class FloatingAutoTimer : MonoBehaviour
             PositionHud();
     }
 
+    void CheckTimerAlerts()
+    {
+        if (_timerExpired) return;
+
+        float elapsed = _initialTimeSeconds - timeRemaining;
+        if (!_alertedOneMinuteElapsed && elapsed >= 60f)
+        {
+            _alertedOneMinuteElapsed = true;
+            ShowTimerAlert("1 minute complete.", false);
+        }
+
+        if (!_alertedFiveMinutesLeft && timeRemaining <= 300f)
+        {
+            _alertedFiveMinutesLeft = true;
+            ShowTimerAlert("5 minutes left.", false);
+        }
+
+        if (!_alertedOneMinuteLeft && timeRemaining <= 60f)
+        {
+            _alertedOneMinuteLeft = true;
+            ShowTimerAlert("1 minute left.", false);
+        }
+
+        if (timeRemaining > 0f && timeRemaining <= 30f)
+        {
+            int secondsLeft = Mathf.CeilToInt(timeRemaining);
+            if (secondsLeft != _lastFinalSecondsAlert)
+            {
+                _lastFinalSecondsAlert = secondsLeft;
+                ShowTimerAlert($"{secondsLeft}...", true);
+            }
+        }
+    }
+
+    void ShowTimerAlert(string message, bool rapid)
+    {
+        if (alertText == null || alertPanel == null) return;
+        alertText.text = message;
+        PositionAlert();
+        if (alertRoutine != null) StopCoroutine(alertRoutine);
+        alertRoutine = StartCoroutine(AlertLifetime(rapid
+            ? finalCountdownAlertDurationSeconds
+            : alertDurationSeconds));
+    }
+
+    IEnumerator AlertLifetime(float duration)
+    {
+        if (alertPanel == null) yield break;
+        alertPanel.SetActive(true);
+        float t = 0f;
+        float dur = Mathf.Max(0.25f, duration);
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            PositionAlert();
+            yield return null;
+        }
+        alertPanel.SetActive(false);
+        alertRoutine = null;
+    }
+
+    void PositionAlert()
+    {
+        if (alertCanvas == null || Camera.main == null) return;
+        Transform cam = Camera.main.transform;
+        alertCanvas.transform.position =
+            cam.position + cam.forward * alertForwardMeters + cam.up * alertUpMeters;
+        alertCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
+    }
+
     void TryToggleHudVisibility()
     {
         bool pressedEdge = false;
@@ -166,6 +256,7 @@ public class FloatingAutoTimer : MonoBehaviour
         }
 
         XrHaptics.PulseLeft(0.35f, 0.04f);
+        GameAudioFeedback.PlayMenuSelect();
     }
 
     void PositionHud()
@@ -235,7 +326,7 @@ public class FloatingAutoTimer : MonoBehaviour
         timeText = clockObj.AddComponent<TextMeshProUGUI>();
         timeText.text      = "10:00";
         timeText.fontSize  = 0.072f;
-        timeText.fontStyle = FontStyles.Bold;
+        timeText.fontStyle = MenuThemes.Typography.Header;
         timeText.alignment = TextAlignmentOptions.Center;
         timeText.color     = GoldTimer;
         var crt = clockObj.GetComponent<RectTransform>();
@@ -271,7 +362,7 @@ public class FloatingAutoTimer : MonoBehaviour
         hintBody.transform.SetParent(menuPanel.transform, false);
         hintDisplayText = hintBody.AddComponent<TextMeshProUGUI>();
         hintDisplayText.text =
-            "Hints are directional, not exact. They can move you forward or through a convincing decoy.\nUse <b>grip</b> in a hint row, or laser + trigger.\nPress <b>left Y</b> to show/hide this HUD (H in Editor).";
+            "Hints adapt to your current clue progress.\nUse <b>grip</b> in a hint row, or laser + trigger.\nPress <b>left Y</b> to show/hide this HUD (H in Editor).";
         hintDisplayText.fontSize  = 0.026f;
         hintDisplayText.alignment = TextAlignmentOptions.Center;
         hintDisplayText.color     = MenuThemes.Hud.TextSecondary;
@@ -284,12 +375,46 @@ public class FloatingAutoTimer : MonoBehaviour
         hrt.offsetMax = Vector2.zero;
     }
 
+    void BuildAlertUI()
+    {
+        var alertObj = new GameObject("TimerAlertCanvas");
+        alertObj.transform.SetParent(transform);
+        alertCanvas = alertObj.AddComponent<Canvas>();
+        alertCanvas.renderMode = RenderMode.WorldSpace;
+        alertObj.AddComponent<CanvasScaler>();
+        alertObj.AddComponent<GraphicRaycaster>();
+
+        var rt = alertObj.GetComponent<RectTransform>();
+        rt.sizeDelta = new Vector2(0.50f, 0.12f);
+        rt.localScale = Vector3.one;
+
+        alertPanel = MakePanel("AlertPanel", alertObj.transform,
+            new Vector2(0.42f, 0.09f), Vector2.zero, new Color(
+                MenuThemes.Completion.Background.r,
+                MenuThemes.Completion.Background.g,
+                MenuThemes.Completion.Background.b, 0.95f));
+        MakeBorderGlow(alertPanel.transform, new Vector2(0.42f, 0.09f), MenuThemes.Completion.AccentDanger);
+        alertText = new GameObject("AlertText").AddComponent<TextMeshProUGUI>();
+        alertText.transform.SetParent(alertPanel.transform, false);
+        alertText.fontSize = 0.034f;
+        alertText.fontStyle = MenuThemes.Typography.Header;
+        alertText.alignment = TextAlignmentOptions.Center;
+        alertText.color = MenuThemes.Completion.AccentPrimary;
+        alertText.textWrappingMode = TextWrappingModes.Normal;
+        var art = alertText.GetComponent<RectTransform>();
+        art.anchorMin = Vector2.zero;
+        art.anchorMax = Vector2.one;
+        art.offsetMin = Vector2.zero;
+        art.offsetMax = Vector2.zero;
+        alertPanel.SetActive(false);
+    }
+
     void OnHint1()
     {
         if (!hint1Button.interactable) return;
         _hintsUsed++;
-        hintDisplayText.text =
-            "Start in the seating zone. A readable lead is there, but a similar-looking path can pull you toward music props. Follow what stays consistent after you test it.";
+        int stage = GetHintStage();
+        hintDisplayText.text = GetProgressHint(stage, 1);
         hintDisplayText.color = Color.white;
         hint1Button.interactable = false;
         hint2Button.interactable = true;
@@ -297,24 +422,50 @@ public class FloatingAutoTimer : MonoBehaviour
         var l = hint2Button.GetComponentInChildren<TextMeshProUGUI>();
         if (l != null) l.color = Color.white;
         XrHaptics.PulseRight(0.45f, 0.06f);
+        GameAudioFeedback.PlayMenuSelect();
     }
 
     void OnHint2()
     {
         if (!hint2Button.interactable) return;
         _hintsUsed++;
-        if (PuzzleManager.DecoyInteractionCount == 0)
-        {
-            hintDisplayText.text =
-                "After the seating clues, investigate the corner and any mechanism that seems to respond to your hand. One route is persuasive but not essential.";
-        }
-        else
-        {
-            hintDisplayText.text =
-                "If you've hit a dead end, reset to the core chain: seating clues -> corner globe -> clock reveal -> key to the door knob trigger.";
-        }
+        int stage = GetHintStage();
+        hintDisplayText.text = GetProgressHint(stage, 2);
         hint2Button.interactable = false;
         XrHaptics.PulseRight(0.45f, 0.06f);
+        GameAudioFeedback.PlayMenuSelect();
+    }
+
+    static int GetHintStage()
+    {
+        int solved = PuzzleManager.SolvedClueCount;
+        if (solved <= 0) return 0;
+        if (solved == 1) return 1;
+        if (solved == 2) return 2;
+        return 3;
+    }
+
+    static string GetProgressHint(int stage, int hintNumber)
+    {
+        switch (stage)
+        {
+            case 0:
+                return hintNumber == 1
+                    ? "Start at the seating area.\nUse select to slide seats, then grab the first book clue to begin progress."
+                    : "You are before clue 1 completion.\nFocus on finding and reading the first sofa book; ignore side paths for now.";
+            case 1:
+                return hintNumber == 1
+                    ? "Clue 1 is done.\nNow reveal and read the second hidden book in the seating cluster."
+                    : "Clue 2 is a book under seating.\nSlide nearby couches/chairs, then grab and read the book that advances progress.";
+            case 2:
+                return hintNumber == 1
+                    ? "Clue 2 is done.\nNext objective is a globe interaction."
+                    : "For clue 3, use the real globe on the corner table (<b>TableProp_Globe</b>) to progress.";
+            default:
+                return hintNumber == 1
+                    ? "All clues are solved.\nCheck the clocks to reveal the key."
+                    : "Pick up the key, follow the door guidance light, and use the correct door knob trigger to escape.";
+        }
     }
 
     static GameObject MakePanel(string name, Transform parent,
@@ -360,7 +511,7 @@ public class FloatingAutoTimer : MonoBehaviour
         var tmp       = textObj.AddComponent<TextMeshProUGUI>();
         tmp.text      = label;
         tmp.alignment = TextAlignmentOptions.Center;
-        tmp.fontStyle = FontStyles.Bold;
+        tmp.fontStyle = MenuThemes.Typography.Emphasis;
         tmp.fontSize  = h * 0.38f;
         tmp.color     = Color.white;
         var trt       = textObj.GetComponent<RectTransform>();
@@ -397,6 +548,7 @@ public class FloatingAutoTimer : MonoBehaviour
         if (timerIsRunning)
         {
             timeRemaining = Mathf.Max(0f, timeRemaining - Time.deltaTime);
+            CheckTimerAlerts();
             if (timeRemaining <= 0f)
             {
                 timerIsRunning = false;

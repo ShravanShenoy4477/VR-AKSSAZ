@@ -16,12 +16,12 @@ using UnityEngine.EventSystems;
 public class TimeUpUI : MonoBehaviour
 {
     // ── Colours ───────────────────────────────────────────────────────────────
-    static readonly Color BgDark      = MenuThemes.Hud.Background;
-    static readonly Color HeaderColor = new Color(MenuThemes.Hud.Warning.r * 0.35f, MenuThemes.Hud.Warning.g * 0.35f, MenuThemes.Hud.Warning.b * 0.35f, 1f);
-    static readonly Color AccentRed   = MenuThemes.Hud.Warning;
-    static readonly Color AccentTeal  = MenuThemes.Hud.AccentSecondary;
-    static readonly Color TextSub     = MenuThemes.Hud.TextDanger;
-    static readonly Color TextPrimary = MenuThemes.Hud.TextPrimary;
+    static readonly Color BgDark      = MenuThemes.Completion.Background;
+    static readonly Color HeaderColor = MenuThemes.Completion.Header;
+    static readonly Color AccentRed   = MenuThemes.Completion.AccentDanger;
+    static readonly Color AccentTeal  = MenuThemes.Completion.Button;
+    static readonly Color TextSub     = MenuThemes.Completion.TextSecondary;
+    static readonly Color TextPrimary = MenuThemes.Completion.TextPrimary;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Canvas    _canvas;
@@ -138,26 +138,26 @@ public class TimeUpUI : MonoBehaviour
         var header = MakePanel("Header", _panel.transform,
             new Vector2(0.70f, 0.10f), new Vector2(0f, 0.25f), HeaderColor);
         MakeLabel("HeaderLabel", header.transform,
-            "ESCAPE ROOM", 0.036f, FontStyles.Bold,
-            MenuThemes.Hud.TextDanger, TextAlignmentOptions.Center,
+            "ESCAPE ROOM", 0.036f, MenuThemes.Typography.Header,
+            MenuThemes.Completion.AccentPrimary, TextAlignmentOptions.Center,
             new Vector2(0.60f, 0.10f), Vector2.zero);
 
         // Title
         MakeLabel("TitleLabel", _panel.transform,
-            "TIME'S UP!", 0.062f, FontStyles.Bold,
+            "TIME'S UP!", 0.062f, MenuThemes.Typography.Header,
             AccentRed, TextAlignmentOptions.Center,
             new Vector2(0.60f, 0.09f), new Vector2(0f, 0.095f));
 
         // Subtitle
         MakeLabel("SubtitleLabel", _panel.transform,
-            "You didn't escape in time.\nBetter luck next round!", 0.028f, FontStyles.Normal,
+            "You didn't escape in time.\nBetter luck next round!", 0.028f, MenuThemes.Typography.Body,
             TextSub, TextAlignmentOptions.Center,
             new Vector2(0.60f, 0.09f), new Vector2(0f, -0.010f));
 
         // Divider
         var divider = new GameObject("Divider");
         divider.transform.SetParent(_panel.transform, false);
-        divider.AddComponent<Image>().color = new Color(MenuThemes.Hud.Warning.r, MenuThemes.Hud.Warning.g, MenuThemes.Hud.Warning.b, 0.40f);
+        divider.AddComponent<Image>().color = new Color(MenuThemes.Completion.AccentDanger.r, MenuThemes.Completion.AccentDanger.g, MenuThemes.Completion.AccentDanger.b, 0.40f);
         var drt = divider.GetComponent<RectTransform>();
         drt.anchorMin = drt.anchorMax = drt.pivot = new Vector2(0.5f, 0.5f);
         drt.sizeDelta        = new Vector2(0.60f, 0.003f);
@@ -165,8 +165,8 @@ public class TimeUpUI : MonoBehaviour
 
         // Stats
         MakeLabel("StatsLabel", _panel.transform,
-            "", 0.024f, FontStyles.Normal,
-            new Color(MenuThemes.Hud.TextPrimary.r, MenuThemes.Hud.TextPrimary.g, MenuThemes.Hud.TextPrimary.b, 0.85f), TextAlignmentOptions.Center,
+            "", 0.024f, MenuThemes.Typography.Body,
+            new Color(MenuThemes.Completion.TextPrimary.r, MenuThemes.Completion.TextPrimary.g, MenuThemes.Completion.TextPrimary.b, 0.85f), TextAlignmentOptions.Center,
             new Vector2(0.62f, 0.06f), new Vector2(0f, -0.135f));
 
         // Play Again button — uses standard Button component for reliable interaction
@@ -280,7 +280,7 @@ public class TimeUpUI : MonoBehaviour
         var tmp       = textObj.AddComponent<TextMeshProUGUI>();
         tmp.text      = label;
         tmp.alignment = TextAlignmentOptions.Center;
-        tmp.fontStyle = FontStyles.Bold;
+        tmp.fontStyle = MenuThemes.Typography.Emphasis;
         tmp.fontSize  = h * 0.42f;
         tmp.color     = Color.white;
         var trt       = textObj.GetComponent<RectTransform>();

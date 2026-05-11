@@ -6,9 +6,9 @@ using UnityEngine.EventSystems;
 using UnityEngine.XR;
 
 /// <summary>
-/// Attach to the decoy book behind the wrong (lit) couch.
-/// Looks and feels exactly like a real clue — but the sketch shows a CD disc
-/// instead of a globe, sending the player toward the gramophone (dead end).
+/// Attach to the decoy book behind the wrong couch.
+/// Looks and feels exactly like a real clue and points toward the gramophone path.
+/// The branch is only declared as a decoy at gramophone interaction.
 ///
 /// No OnClueSolved fired — decoys never count toward puzzle progress.
 ///
@@ -36,6 +36,7 @@ public class DecoyNote : MonoBehaviour
     // ── Colours — warm cream, same as real clues so player trusts it ──────────
     static readonly Color BgPaper   = MenuThemes.Clue.Background;
     static readonly Color HeaderCol = MenuThemes.Clue.Header;
+    static readonly Color Ink       = MenuThemes.Clue.Ink;
     static readonly Color InkFaded  = MenuThemes.Clue.InkMuted;
     static readonly Color SketchCol = MenuThemes.Clue.Sketch;
     static readonly Color CDCol     = MenuThemes.Clue.CdOuter;  // silver disc
@@ -49,7 +50,7 @@ public class DecoyNote : MonoBehaviour
     private Canvas     _clueCanvas;
     private GameObject _cluePanel;
     private Button     _gotItBtn;
-    private bool       _opened   = false;
+    private bool       _unlockedGramophonePath;
     private bool       _prevGrip = false;
     private bool       _prevGripL = false;
     private bool       _fading;
@@ -186,9 +187,11 @@ public class DecoyNote : MonoBehaviour
     // ── Interaction ───────────────────────────────────────────────────────────
     private void ShowClue()
     {
-        if (!_opened)
-            PuzzleManager.ReportDecoyInteraction("decoy_note", this);
-        _opened = true;
+        if (!_unlockedGramophonePath)
+        {
+            PuzzleManager.UnlockDecoyPath("gramophone", this);
+            _unlockedGramophonePath = true;
+        }
         _cluePanel.SetActive(true);
         ResetPanelCanvasGroup();
         StartCoroutine(FadeInPanelCoroutine());
@@ -201,7 +204,8 @@ public class DecoyNote : MonoBehaviour
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
 
-        StartCoroutine(EnableGotItAfterDelay(5f));
+        GameAudioFeedback.PlayCorrectSelection();
+        StartCoroutine(EnableGotItAfterDelay(0.75f));
     }
 
     private void Dismiss()
@@ -342,7 +346,7 @@ public class DecoyNote : MonoBehaviour
             new Vector2(PW, PH), Vector2.zero, BgPaper);
         _cluePanel = panel;
 
-        // Header — says "CLUE" just like the real ones (player shouldn't suspect yet)
+        // Header — same as real clues (player shouldn't suspect yet)
         float headerH = PH * 0.13f;
         float headerY = PH * 0.5f - headerH * 0.5f;
         var header = MakeRect("Header", panel.transform,
@@ -369,55 +373,48 @@ public class DecoyNote : MonoBehaviour
             gotItBox.size = new Vector3(s.x * 1.12f, s.y * 1.18f, Mathf.Max(0.042f, s.z * 1.4f));
         }
 
-        // ── Sketch: CORNER → TABLE + CD DISC ──────────────────────────────
+        // ── Sketch: GRAMOPHONE target clue ────────────────────────────────
         const float SY = 0.03f;
 
-        // L-shaped corner (same as real Clue 2 — looks authentic)
-        float cx = -0.17f, cy = SY - 0.06f;
-        MakeRect("CornerH", panel.transform,
-            new Vector2(0.16f, 0.011f), new Vector2(cx + 0.08f, cy), SketchCol);
-        MakeRect("CornerV", panel.transform,
-            new Vector2(0.011f, 0.16f), new Vector2(cx, cy + 0.08f), SketchCol);
-        MakeLabel("CornerLbl", panel.transform,
-            "CORNER", 0.017f, FontStyles.Bold, InkFaded,
+        float postX = -0.02f;
+        MakeRect("Post", panel.transform,
+            new Vector2(0.010f, 0.090f), new Vector2(postX, SY - 0.035f), SketchCol);
+        MakeRect("Base", panel.transform,
+            new Vector2(0.090f, 0.010f), new Vector2(postX, SY - 0.080f), SketchCol);
+        MakeRect("HornNeck", panel.transform,
+            new Vector2(0.018f, 0.018f), new Vector2(postX + 0.020f, SY + 0.015f), SketchCol);
+        MakeRect("HornMid", panel.transform,
+            new Vector2(0.036f, 0.020f), new Vector2(postX + 0.048f, SY + 0.018f), SketchCol);
+        MakeRect("HornBell", panel.transform,
+            new Vector2(0.052f, 0.040f), new Vector2(postX + 0.085f, SY + 0.022f), SketchCol);
+        MakeRect("CrankArm", panel.transform,
+            new Vector2(0.036f, 0.008f), new Vector2(postX + 0.022f, SY - 0.010f), SketchCol);
+        MakeRect("CrankKnob", panel.transform,
+            new Vector2(0.010f, 0.022f), new Vector2(postX + 0.040f, SY - 0.021f), SketchCol);
+        MakeLabel("GramLbl", panel.transform,
+            "MUSIC HORN", 0.015f, FontStyles.Bold, InkFaded,
             TextAlignmentOptions.Center,
-            new Vector2(0.14f, 0.025f), new Vector2(cx + 0.07f, cy + 0.17f));
+            new Vector2(0.22f, 0.022f), new Vector2(postX + 0.04f, SY + 0.102f));
 
-        // Arrow →
         MakeLabel("Arrow", panel.transform, "→",
             0.050f, FontStyles.Bold, SketchCol,
             TextAlignmentOptions.Center,
-            new Vector2(0.07f, 0.06f), new Vector2(0.01f, SY));
+            new Vector2(0.07f, 0.06f), new Vector2(0.12f, SY));
 
-        // Table
-        float tx = 0.11f;
-        MakeRect("TableTop",  panel.transform,
-            new Vector2(0.20f,  0.011f), new Vector2(tx,          SY - 0.01f),   SketchCol);
-        MakeRect("TableLegL", panel.transform,
-            new Vector2(0.011f, 0.075f), new Vector2(tx - 0.08f,  SY - 0.053f),  SketchCol);
-        MakeRect("TableLegR", panel.transform,
-            new Vector2(0.011f, 0.075f), new Vector2(tx + 0.08f,  SY - 0.053f),  SketchCol);
-        MakeLabel("TableLbl", panel.transform,
-            "TABLE", 0.017f, FontStyles.Bold, InkFaded,
+        float sketchBottomY = SY - 0.090f;
+        float btnTopY = btnY + btnH * 0.5f;
+        float bodyGap = PH * 0.02f;
+        float bodyH = (sketchBottomY - bodyGap) - (btnTopY + bodyGap);
+        float bodyY = (sketchBottomY - bodyGap + btnTopY + bodyGap) * 0.5f;
+        var bodyTmp = MakeLabel("BodyHint", panel.transform,
+            "Where brass sings and a handle turns,\nseek the next answer there.",
+            PH * 0.042f, FontStyles.Italic, Ink,
             TextAlignmentOptions.Center,
-            new Vector2(0.16f, 0.025f), new Vector2(tx, SY - 0.110f));
-
-        // ── CD disc on the table ───────────────────────────────────────────
-        // Outer silver disc
-        MakeRect("CDOuter", panel.transform,
-            new Vector2(0.080f, 0.080f), new Vector2(tx, SY + 0.055f), CDCol);
-        // Inner dark ring (groove detail)
-        MakeRect("CDMid", panel.transform,
-            new Vector2(0.052f, 0.052f), new Vector2(tx, SY + 0.055f),
-            MenuThemes.Clue.CdInner);
-        // Centre hole
-        MakeRect("CDHole", panel.transform,
-            new Vector2(0.018f, 0.018f), new Vector2(tx, SY + 0.055f), CDHole);
-        // Small label
-        MakeLabel("CDLbl", panel.transform,
-            "DISC", 0.016f, FontStyles.Bold, InkFaded,
-            TextAlignmentOptions.Center,
-            new Vector2(0.10f, 0.025f), new Vector2(tx, SY + 0.108f));
+            new Vector2(PW - 0.10f, Mathf.Max(bodyH, 0.01f)),
+            new Vector2(0f, bodyY));
+        bodyTmp.enableAutoSizing = true;
+        bodyTmp.fontSizeMin = PH * 0.026f;
+        bodyTmp.fontSizeMax = PH * 0.042f;
 
         panel.AddComponent<CanvasGroup>();
         _cluePanel.SetActive(false);
@@ -436,7 +433,7 @@ public class DecoyNote : MonoBehaviour
         return obj;
     }
 
-    static void MakeLabel(string name, Transform parent,
+    static TextMeshProUGUI MakeLabel(string name, Transform parent,
         string text, float fontSize, FontStyles style, Color color,
         TextAlignmentOptions align, Vector2 size, Vector2 pos)
     {
@@ -448,11 +445,13 @@ public class DecoyNote : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.color              = color;
         tmp.alignment          = align;
-        tmp.textWrappingMode = TextWrappingModes.NoWrap;
+        tmp.textWrappingMode   = TextWrappingModes.Normal;
+        tmp.overflowMode       = TextOverflowModes.Truncate;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;
         rt.anchoredPosition = pos;
+        return tmp;
     }
 
     Button MakeButton(string name, string label, Transform parent, Vector2 pos, float w, float h)

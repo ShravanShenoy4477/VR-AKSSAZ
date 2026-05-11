@@ -311,7 +311,8 @@ public class DecoyGramophoneCD : MonoBehaviour
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
 
-        StartCoroutine(EnableGotItAfterDelay(5f));
+        GameAudioFeedback.PlayDecoyReveal();
+        StartCoroutine(EnableGotItAfterDelay(0.75f));
     }
 
     IEnumerator EnableGotItAfterDelay(float delay)
@@ -553,6 +554,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         tmp.color              = color;
         tmp.alignment          = align;
         tmp.textWrappingMode = TextWrappingModes.Normal;
+        tmp.overflowMode = TextOverflowModes.Truncate;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;

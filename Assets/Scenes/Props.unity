@@ -1812,6 +1812,7 @@ MonoBehaviour:
   m_ClueText: "Time stands still for those who look closely \u2014\nthe face on the
     wall knows what lies behind it."
   clueIndex: 3
+  panelFadeInSeconds: 0.25
   panelFadeOutSeconds: 0.62
   nearCloseDismissHoldSeconds: 0.72
   nearCloseBoundsExpand: 0.12
@@ -3048,6 +3049,7 @@ MonoBehaviour:
   m_DebugHeartbeatInterval: 1
   m_Zone: {fileID: 0}
   m_RightController: {fileID: 0}
+  m_LeftController: {fileID: 0}
   m_HingePivot: {fileID: 0}
   m_LocalSwingAxis: {x: 0, y: 0, z: -1}
   m_TiltDegrees: 35
@@ -3076,6 +3078,16 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+  m_KeyObject: {fileID: 0}
+  m_KeyRevealClosedLocalOffset: {x: 0, y: 0, z: -0.06}
+  m_KeyRevealLocalEuler: {x: 0, y: 0, z: 0}
+  m_EnableKeySpotlight: 1
+  m_KeySpotColor: {r: 1, g: 0.93, b: 0.82, a: 1}
+  m_KeySpotIntensity: 2.4
+  m_KeySpotRange: 1.4
+  m_KeySpotAngle: 38
+  m_KeySpotClosedLocalOffset: {x: 0.14, y: 0.2, z: 0.16}
+  m_ForceEnableKeyRenderersOnReveal: 1
 --- !u!1001 &310000101
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -3772,6 +3784,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 91329855871895122, guid: 517d41a470287424281968464f2e5552, type: 3}
       insertIndex: -1
       addedObject: {fileID: 775001242}
+    - targetCorrespondingSourceObject: {fileID: 91329855871895122, guid: 517d41a470287424281968464f2e5552, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 775001243}
   m_SourcePrefab: {fileID: 100100000, guid: 517d41a470287424281968464f2e5552, type: 3}
 --- !u!4 &310000202 stripped
 Transform:
@@ -4576,11 +4591,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 289503c414dd04744b6aebf53c5311f3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ClueNote
-  clueText: "Where the cushions end and the shadows begin \u2014\nyour next answer
-    hides behind the larger seat."
-  clueLabel: NOTE
+  clueText: "Across the seating pair, a hidden page waits.\nTwo couches keep secrets
+    beneath them - choose carefully."
+  clueLabel: CLUE
   clueIndex: 1
   minHoldSecondsForClueReveal: 1
+  panelFadeInSeconds: 0.25
   panelFadeOutSeconds: 0.62
   nearCloseDismissHoldSeconds: 0.72
   nearCloseBoundsExpand: 0.12
@@ -6661,6 +6677,27 @@ MonoBehaviour:
   doorHinge: {fileID: 687573736}
   doorGuideTarget: {fileID: 687573735}
   revealLight: {fileID: 1432813633}
+  keyGrabAttachLocalOffset: {x: 0, y: 0, z: 0}
+  keyGrabAttachLocalEuler: {x: 0, y: 0, z: 90}
+  enableDoorGuidanceOnKeyPickup: 1
+  doorGuideColor: {r: 1, g: 0.88, b: 0.45, a: 1}
+  doorGuideSpotIntensity: 2.6
+  doorGuideSpotRange: 4.6
+  doorGuideSpotAngle: 34
+  doorGuideSpotOffset: {x: 0, y: 0.12, z: 0.1}
+  doorGuideHingeFillIntensity: 1.1
+  doorGuideFillOffset: {x: -0.05, y: 0.02, z: 0}
+  doorGuideHingePulseIntensity: 2.2
+  doorGuideHingePulseRange: 1.8
+  doorGuideHingePulseAngle: 28
+  doorGuideHingePulseOffset: {x: 0, y: 0, z: 0}
+  doorGuidePulseSpeed: 3.8
+  doorGuidePulseAmount: 0.25
+  keyGuideColor: {r: 1, g: 0.94, b: 0.82, a: 1}
+  keyGuideIntensity: 3.1
+  keyGuideRange: 2.4
+  keyGuideAngle: 46
+  keyGuideOffset: {x: 0.22, y: 0.3, z: 0.2}
   notifForwardMeters: 0.48
   notifRightMeters: 0.06
   notifUpMeters: -0.03
@@ -7262,9 +7299,140 @@ MonoBehaviour:
   m_RightController: {fileID: 0}
   m_LeftController: {fileID: 0}
   clueIndex: 2
+  minHoldSecondsForClueReveal: 0.55
+  panelFadeInSeconds: 0.25
   panelFadeOutSeconds: 0.62
   nearCloseDismissHoldSeconds: 0.72
   nearCloseBoundsExpand: 0.12
+--- !u!114 &775001243
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 310000211}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ad34abafad169848a38072baa96cdb2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.XR.Interaction.Toolkit::UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable
+  m_InteractionManager: {fileID: 0}
+  m_Colliders: []
+  m_InteractionLayers:
+    m_Bits: 1
+  m_DistanceCalculationMode: 1
+  m_SelectMode: 0
+  m_FocusMode: 1
+  m_CustomReticle: {fileID: 0}
+  m_AllowGazeInteraction: 0
+  m_AllowGazeSelect: 0
+  m_OverrideGazeTimeToSelect: 0
+  m_GazeTimeToSelect: 0.5
+  m_OverrideTimeToAutoDeselectGaze: 0
+  m_TimeToAutoDeselectGaze: 3
+  m_AllowGazeAssistance: 0
+  m_FirstHoverEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_LastHoverExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_HoverEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_HoverExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_FirstSelectEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_LastSelectExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_SelectEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_SelectExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_FirstFocusEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_LastFocusExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_FocusEntered:
+    m_PersistentCalls:
+      m_Calls: []
+  m_FocusExited:
+    m_PersistentCalls:
+      m_Calls: []
+  m_Activated:
+    m_PersistentCalls:
+      m_Calls: []
+  m_Deactivated:
+    m_PersistentCalls:
+      m_Calls: []
+  m_StartingHoverFilters: []
+  m_StartingSelectFilters: []
+  m_StartingInteractionStrengthFilters: []
+  m_AutoFindParentInteractableInHierarchy: 0
+  m_ParentInteractableObject: {fileID: 0}
+  m_AttachTransform: {fileID: 0}
+  m_SecondaryAttachTransform: {fileID: 0}
+  m_UseDynamicAttach: 0
+  m_MatchAttachPosition: 1
+  m_MatchAttachRotation: 1
+  m_SnapToColliderVolume: 1
+  m_ReinitializeDynamicAttachEverySingleGrab: 1
+  m_AttachEaseInTime: 0.15
+  m_MovementType: 2
+  m_PredictedVisualsTransform: {fileID: 0}
+  m_VelocityDamping: 1
+  m_VelocityScale: 1
+  m_AngularVelocityDamping: 1
+  m_AngularVelocityScale: 1
+  m_TrackPosition: 1
+  m_SmoothPosition: 0
+  m_SmoothPositionAmount: 8
+  m_TightenPosition: 0.1
+  m_TrackRotation: 1
+  m_SmoothRotation: 0
+  m_SmoothRotationAmount: 8
+  m_TightenRotation: 0.1
+  m_TrackScale: 1
+  m_SmoothScale: 0
+  m_SmoothScaleAmount: 8
+  m_TightenScale: 0.1
+  m_ThrowOnDetach: 1
+  m_ThrowSmoothingDuration: 0.25
+  m_ThrowSmoothingCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  m_ThrowVelocityScale: 1.5
+  m_ThrowAngularVelocityScale: 1
+  m_ForceGravityOnDetach: 0
+  m_RetainTransformParent: 1
+  m_StartingSingleGrabTransformers: []
+  m_StartingMultipleGrabTransformers: []
+  m_AddDefaultGrabTransformers: 1
+  m_FarAttachMode: 0
+  m_LimitLinearVelocity: 0
+  m_LimitAngularVelocity: 0
+  m_MaxLinearVelocityDelta: 10
+  m_MaxAngularVelocityDelta: 20
 --- !u!1001 &775136937
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -7622,11 +7790,18 @@ MonoBehaviour:
   m_LegacyGripZoneLocalPos: {x: 0, y: 0.37, z: 0.2}
   m_FallbackGripZoneLocalSize: {x: 2.5, y: 1.15, z: 1.05}
   m_FallbackGripZoneLocalCenter: {x: 0, y: 0.38, z: 0}
-  m_AllowAnalogGripAxisFallback: 1
-  m_GripAxisPressedThreshold: 0.72
+  m_AllowAnalogSelectAxisFallback: 1
+  m_SelectAxisPressedThreshold: 0.62
   m_ZoneDistanceTolerance: 0.05
+  m_MaxHandDistanceFromSofa: 1.8
+  m_BlockSlideWhenHandNearGrabbable: 1
+  m_GrabbableBlockRadius: 0.16
+  m_MinNeighborGap: 0.06
+  m_AvoidNeighborOverlap: 1
   m_DebugLogs: 1
   m_DebugLogInterval: 0.35
+  m_LockedPulseAmplitude: 0.16
+  m_LockedPulseDuration: 0.03
 --- !u!1001 &835245221
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -8323,9 +8498,12 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+  panelFadeInSeconds: 0.25
   panelFadeOutSeconds: 0.62
   nearCloseDismissHoldSeconds: 0.72
   nearCloseBoundsExpand: 0.12
+  lockedPulseAmplitude: 0.16
+  lockedPulseDuration: 0.03
 --- !u!1001 &881440692
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -17821,7 +17999,7 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: 445577604489475545, guid: 9e468b7c08268ed46aef4e85f6889041, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -5.122072
+      value: -4.997
       objectReference: {fileID: 0}
     - target: {fileID: 445577604489475545, guid: 9e468b7c08268ed46aef4e85f6889041, type: 3}
       propertyPath: m_LocalPosition.y
@@ -17829,7 +18007,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 445577604489475545, guid: 9e468b7c08268ed46aef4e85f6889041, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -1.1742402
+      value: -1.564
       objectReference: {fileID: 0}
     - target: {fileID: 445577604489475545, guid: 9e468b7c08268ed46aef4e85f6889041, type: 3}
       propertyPath: m_LocalRotation.w
@@ -17889,6 +18067,7 @@ MonoBehaviour:
   interactRadius: 0.3
   m_RightController: {fileID: 775136938}
   m_LeftController: {fileID: 0}
+  panelFadeInSeconds: 0.25
   panelFadeOutSeconds: 0.62
   nearCloseDismissHoldSeconds: 0.72
   nearCloseBoundsExpand: 0.12

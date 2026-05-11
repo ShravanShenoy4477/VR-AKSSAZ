@@ -64,6 +64,11 @@ public class SofaProximitySlide : MonoBehaviour
     [Tooltip("Ignore sofa slide press when that hand is near another grabbable object (e.g. clue book).")]
     [SerializeField] bool m_BlockSlideWhenHandNearGrabbable = true;
     [SerializeField, Range(0.05f, 0.35f)] float m_GrabbableBlockRadius = 0.16f;
+    [Header("Neighbor sofa spacing")]
+    [Tooltip("Extra minimum spacing (meters) kept between sofas after slide.")]
+    [SerializeField, Range(0f, 0.35f)] float m_MinNeighborGap = 0.06f;
+    [Tooltip("If true, opening distance is clamped to avoid overlap with nearby sofas.")]
+    [SerializeField] bool m_AvoidNeighborOverlap = true;
 
     [Header("Debug")]
     [Tooltip("Logs grip edges, in-zone checks, and slide triggers.")]
@@ -80,8 +85,6 @@ public class SofaProximitySlide : MonoBehaviour
     bool      m_IsAnimating;
     bool      m_PrevGripR;
     bool      m_PrevGripL;
-    bool      m_PrevAltGripR;
-    bool      m_PrevAltGripL;
     Coroutine m_Routine;
     float     m_NextDebugLogAt;
     readonly Collider[] m_NearbyColliders = new Collider[24];
@@ -268,8 +271,6 @@ public class SofaProximitySlide : MonoBehaviour
 
         bool edgeR = ReadSelectEdge(XRNode.RightHand, ref m_PrevGripR);
         bool edgeL = ReadSelectEdge(XRNode.LeftHand, ref m_PrevGripL);
-        bool gripEdgeR = ReadGripEdge(XRNode.RightHand, ref m_PrevAltGripR);
-        bool gripEdgeL = ReadGripEdge(XRNode.LeftHand, ref m_PrevAltGripL);
 
         bool inR = m_RightController != null && IsInsideZoneWithTolerance(m_Zone, m_RightController.position, m_ZoneDistanceTolerance);
         bool inL = m_LeftController != null && IsInsideZoneWithTolerance(m_Zone, m_LeftController.position, m_ZoneDistanceTolerance);
@@ -280,8 +281,8 @@ public class SofaProximitySlide : MonoBehaviour
 
         if (!PuzzleManager.CanUseSofa())
         {
-            bool lockedTryR = (edgeR || gripEdgeR) && inR && nearSofaR;
-            bool lockedTryL = (edgeL || gripEdgeL) && inL && nearSofaL;
+            bool lockedTryR = edgeR && inR && nearSofaR;
+            bool lockedTryL = edgeL && inL && nearSofaL;
             if (lockedTryR)
             {
                 XrHaptics.PulseRight(m_LockedPulseAmplitude, m_LockedPulseDuration);
@@ -291,11 +292,6 @@ public class SofaProximitySlide : MonoBehaviour
             {
                 XrHaptics.PulseLeft(m_LockedPulseAmplitude, m_LockedPulseDuration);
                 InteractableHapticFeedback.ShowWrongOrderCue(transform);
-            }
-            if ((lockedTryR || lockedTryL) && !m_IsAnimating)
-            {
-                if (m_Routine != null) StopCoroutine(m_Routine);
-                m_Routine = StartCoroutine(AnimateSlide(!m_IsOpen));
             }
             return;
         }
@@ -321,6 +317,9 @@ public class SofaProximitySlide : MonoBehaviour
         if (!allowR && !allowL) return;
 
         // Toggle slide
+        if (!m_IsOpen && m_AvoidNeighborOverlap)
+            m_OpenPosition = ComputeSafeOpenPosition();
+
         if (m_DebugLogs)
             Debug.Log($"[SofaProximitySlide] Triggered slide toggle. NextOpen={!m_IsOpen}");
         if (m_Routine != null) StopCoroutine(m_Routine);
@@ -381,26 +380,6 @@ public class SofaProximitySlide : MonoBehaviour
         return edge;
     }
 
-    bool ReadGripEdge(XRNode node, ref bool prevPressed)
-    {
-        var dev = InputDevices.GetDeviceAtXRNode(node);
-        if (!dev.isValid)
-        {
-            prevPressed = false;
-            return false;
-        }
-
-        if (!dev.TryGetFeatureValue(CommonUsages.gripButton, out bool pressed))
-        {
-            prevPressed = false;
-            return false;
-        }
-
-        bool edge = pressed && !prevPressed;
-        prevPressed = pressed;
-        return edge;
-    }
-
     float DistanceToZone(Transform hand)
     {
         if (m_Zone == null || hand == null) return -1f;
@@ -430,6 +409,118 @@ public class SofaProximitySlide : MonoBehaviour
         }
 
         return false;
+    }
+
+    Vector3 ComputeSafeOpenPosition()
+    {
+        Vector3 desired = m_ClosedPosition + transform.TransformDirection(m_SlideAxis.normalized) * m_SlideDistance;
+        var myBoundsNow = GetSofaBounds();
+        if (myBoundsNow.size.sqrMagnitude <= 1e-6f)
+            return desired;
+
+        Vector3 axis = transform.TransformDirection(m_SlideAxis.normalized);
+        float desiredMove = Vector3.Dot(desired - m_ClosedPosition, axis);
+        float safeMove = desiredMove;
+        float currentMove = Vector3.Dot(transform.position - m_ClosedPosition, axis);
+        float epsilon = 0.005f;
+
+        // Iterate a few times to settle against multiple nearby sofas.
+        for (int iter = 0; iter < 6; iter++)
+        {
+            bool adjusted = false;
+            Bounds candidate = ShiftBounds(myBoundsNow, axis * (safeMove - currentMove));
+            foreach (var other in FindObjectsByType<SofaProximitySlide>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+            {
+                if (other == null || other == this || !other.isActiveAndEnabled) continue;
+                if (!other.m_AvoidNeighborOverlap) continue;
+
+                var otherBounds = other.GetSofaBounds();
+                if (otherBounds.size.sqrMagnitude <= 1e-6f) continue;
+
+                float overlap = ComputeAxisOverlap(candidate, otherBounds, axis, m_MinNeighborGap);
+                if (overlap <= 0f) continue;
+
+                // Retract this sofa along its own travel direction to maintain spacing.
+                float retract = overlap + epsilon;
+                if (desiredMove >= 0f) safeMove -= retract;
+                else safeMove += retract;
+                adjusted = true;
+            }
+
+            if (!adjusted) break;
+        }
+
+        // Clamp to never exceed configured travel and never cross the closed anchor.
+        if (desiredMove >= 0f)
+            safeMove = Mathf.Clamp(safeMove, 0f, desiredMove);
+        else
+            safeMove = Mathf.Clamp(safeMove, desiredMove, 0f);
+
+        Vector3 safe = m_ClosedPosition + axis * safeMove;
+        if (m_DebugLogs)
+            Debug.Log($"[SofaProximitySlide] Safe open computed. desiredMove={desiredMove:0.###} safeMove={safeMove:0.###}");
+        return safe;
+    }
+
+    Bounds GetSofaBounds()
+    {
+        bool any = false;
+        Bounds b = default;
+        foreach (var r in GetComponentsInChildren<Renderer>(true))
+        {
+            if (r == null) continue;
+            if (!any)
+            {
+                b = r.bounds;
+                any = true;
+            }
+            else
+            {
+                b.Encapsulate(r.bounds);
+            }
+        }
+        return any ? b : new Bounds(transform.position, Vector3.zero);
+    }
+
+    static Bounds ShiftBounds(Bounds src, Vector3 delta)
+    {
+        src.center += delta;
+        return src;
+    }
+
+    static float ComputeAxisOverlap(Bounds a, Bounds b, Vector3 axis, float minGap)
+    {
+        axis.Normalize();
+        float ra = ProjectAabbRadius(a.extents, axis);
+        float rb = ProjectAabbRadius(b.extents, axis);
+        float ca = Vector3.Dot(a.center, axis);
+        float cb = Vector3.Dot(b.center, axis);
+        float required = ra + rb + Mathf.Max(0f, minGap);
+        float actual = Mathf.Abs(ca - cb);
+        return required - actual;
+    }
+
+    static float ProjectAabbRadius(Vector3 ext, Vector3 axis)
+    {
+        return Mathf.Abs(axis.x) * ext.x + Mathf.Abs(axis.y) * ext.y + Mathf.Abs(axis.z) * ext.z;
+    }
+
+    public void ApplyReferenceTemplate()
+    {
+        // Matches the in-scene feel of Sofa_Wall9_FacingSofa.
+        m_SlideDistance = 1f;
+        m_AnimationDuration = 0.5f;
+        m_ZoneDistanceTolerance = 0.05f;
+        m_MaxHandDistanceFromSofa = 1.8f;
+        m_AvoidNeighborOverlap = false;
+        m_AutoFitGripZoneToRenderers = true;
+        m_GripZonePadding = 0.22f;
+        m_LegacyGripZoneLocalSize = new Vector3(0.68f, 0.34f, 0.40f);
+        m_LegacyGripZoneLocalPos = new Vector3(0f, 0.37f, 0.20f);
+        m_FallbackGripZoneLocalSize = new Vector3(2.5f, 1.15f, 1.05f);
+        m_FallbackGripZoneLocalCenter = new Vector3(0f, 0.38f, 0f);
+        m_BlockSlideWhenHandNearGrabbable = true;
+        m_GrabbableBlockRadius = 0.16f;
     }
 
     // Draw the slide path in the Scene view for easy tuning

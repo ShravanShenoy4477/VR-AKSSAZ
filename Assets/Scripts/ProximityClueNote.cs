@@ -338,6 +338,7 @@ public class ProximityClueNote : MonoBehaviour
         _gotItBtn.onClick.AddListener(Dismiss);
         _gotItDelayElapsed = false;
         StartCoroutine(EnableGotItAfterDelay(0.75f));
+        GameAudioFeedback.PlayCorrectSelection();
     }
 
     private void ShowClueAfterSolved()
@@ -552,42 +553,22 @@ public class ProximityClueNote : MonoBehaviour
             gotItBox.size = new Vector3(s.x * 1.12f, s.y * 1.18f, Mathf.Max(0.042f, s.z * 1.4f));
         }
 
-        // ── Sketch: CORNER → TABLE + GLOBE ────────────────────────────────
-        const float SY = 0.03f;
-
-        float cx = -0.17f, cy = SY - 0.06f;
-        MakeRect("CornerH", panel.transform,
-            new Vector2(0.16f, 0.011f), new Vector2(cx + 0.08f, cy), SketchCol);
-        MakeRect("CornerV", panel.transform,
-            new Vector2(0.011f, 0.16f), new Vector2(cx, cy + 0.08f), SketchCol);
-        MakeLabel("CornerLbl", panel.transform,
-            "CORNER", 0.017f, FontStyles.Bold, InkFaded,
+        // ── Text clue (ambiguous between globes, with subtle stand/table hint) ──
+        float bodyGap   = PH * 0.03f;
+        float headerBot = headerY - headerH * 0.5f;
+        float btnTop    = btnY + btnH * 0.5f;
+        float bodyH     = (headerBot - bodyGap) - (btnTop + bodyGap);
+        float bodyY     = (headerBot - bodyGap + btnTop + bodyGap) * 0.5f;
+        var bodyTmp = MakeLabel("BodyTxt", panel.transform,
+            "Two round witnesses watch the room, but only one keeps the true trail.\n" +
+            "Trust the one that waits quietly in the corner.",
+            PH * 0.041f, FontStyles.Italic, MenuThemes.Clue.Ink,
             TextAlignmentOptions.Center,
-            new Vector2(0.14f, 0.025f), new Vector2(cx + 0.07f, cy + 0.17f));
-
-        MakeLabel("Arrow", panel.transform, "→",
-            0.050f, FontStyles.Bold, SketchCol,
-            TextAlignmentOptions.Center,
-            new Vector2(0.07f, 0.06f), new Vector2(0.01f, SY));
-
-        float tx = 0.11f;
-        MakeRect("TableTop",  panel.transform,
-            new Vector2(0.20f, 0.011f),  new Vector2(tx, SY - 0.01f),   SketchCol);
-        MakeRect("TableLegL", panel.transform,
-            new Vector2(0.011f, 0.075f), new Vector2(tx - 0.08f, SY - 0.053f), SketchCol);
-        MakeRect("TableLegR", panel.transform,
-            new Vector2(0.011f, 0.075f), new Vector2(tx + 0.08f, SY - 0.053f), SketchCol);
-        MakeLabel("TableLbl", panel.transform,
-            "TABLE", 0.017f, FontStyles.Bold, InkFaded,
-            TextAlignmentOptions.Center,
-            new Vector2(0.16f, 0.025f), new Vector2(tx, SY - 0.110f));
-
-        MakeRect("GlobeBg", panel.transform,
-            new Vector2(0.072f, 0.072f), new Vector2(tx, SY + 0.055f), GlobeCol);
-        MakeLabel("GlobeDot", panel.transform, "●",
-            0.050f, FontStyles.Normal, new Color(0.10f, 0.28f, 0.55f, 1f),
-            TextAlignmentOptions.Center,
-            new Vector2(0.072f, 0.072f), new Vector2(tx, SY + 0.055f));
+            new Vector2(PW - 0.08f * 2f, Mathf.Max(bodyH, 0.01f)),
+            new Vector2(0f, bodyY));
+        bodyTmp.enableAutoSizing = true;
+        bodyTmp.fontSizeMin = PH * 0.030f;
+        bodyTmp.fontSizeMax = PH * 0.041f;
 
         panel.AddComponent<CanvasGroup>();
         _cluePanel.SetActive(false);
@@ -606,7 +587,7 @@ public class ProximityClueNote : MonoBehaviour
         return obj;
     }
 
-    static void MakeLabel(string name, Transform parent,
+    static TextMeshProUGUI MakeLabel(string name, Transform parent,
         string text, float fontSize, FontStyles style, Color color,
         TextAlignmentOptions align, Vector2 size, Vector2 pos)
     {
@@ -618,11 +599,13 @@ public class ProximityClueNote : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.color              = color;
         tmp.alignment          = align;
-        tmp.textWrappingMode = TextWrappingModes.NoWrap;
+        tmp.textWrappingMode   = TextWrappingModes.Normal;
+        tmp.overflowMode       = TextOverflowModes.Truncate;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;
         rt.anchoredPosition = pos;
+        return tmp;
     }
 
     Button MakeButton(string name, string label, Transform parent, Vector2 pos, float w, float h)

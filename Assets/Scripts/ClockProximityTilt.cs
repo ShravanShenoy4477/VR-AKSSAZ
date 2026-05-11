@@ -51,12 +51,12 @@ public class ClockProximityTilt : MonoBehaviour
     AnimationCurve m_Ease = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
 
     [Header("Key reveal (after clue 3)")]
+    [SerializeField] bool m_EnableKeyReveal = true;
     [Tooltip("Optional explicit key object. If empty, auto-uses PuzzleManager.keyObject.")]
     [SerializeField] GameObject m_KeyObject;
     [Tooltip("Position of key relative to clock center when clock is in CLOSED pose.")]
     [SerializeField] Vector3 m_KeyRevealClosedLocalOffset = new Vector3(0f, 0.00f, -0.06f);
     [SerializeField] Vector3 m_KeyRevealLocalEuler = new Vector3(0f, 0f, 0f);
-    [SerializeField] bool m_EnableKeySpotlight = true;
     [SerializeField] Color m_KeySpotColor = new Color(1f, 0.93f, 0.82f, 1f);
     [SerializeField] float m_KeySpotIntensity = 2.4f;
     [SerializeField] float m_KeySpotRange = 1.4f;
@@ -197,6 +197,11 @@ public class ClockProximityTilt : MonoBehaviour
         return edge;
     }
 
+    public void ConfigureAsNonKeyClock()
+    {
+        m_EnableKeyReveal = false;
+    }
+
     void HeartbeatMaybe(System.Func<string> message)
     {
         if (!m_DebugHeartbeat || m_DebugHeartbeatInterval <= 0f)
@@ -261,6 +266,8 @@ public class ClockProximityTilt : MonoBehaviour
 
     void TryRevealKeyBehindClock()
     {
+        if (!m_EnableKeyReveal)
+            return;
         if (PuzzleManager.SolvedClueCount < 3)
             return;
         if (m_KeyObject == null)

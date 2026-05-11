@@ -16,7 +16,7 @@ public class ClueNote : MonoBehaviour
 {
     [Header("Clue Content")]
     [TextArea(3, 6)]
-    public string clueText  = "Where the cushions end and the shadows begin —\nyour next answer hides behind the larger seat.";
+    public string clueText  = "Across the seating pair, a hidden page waits.\nTwo couches keep secrets beneath them - choose carefully.";
     public string clueLabel = "CLUE";
     public int    clueIndex = 1;
 
@@ -262,6 +262,7 @@ public class ClueNote : MonoBehaviour
         }
 
         XrHaptics.PulseRight();
+        GameAudioFeedback.PlayCorrectSelection();
     }
 
     void RevealCluePanelFirstTime()
@@ -434,6 +435,7 @@ public class ClueNote : MonoBehaviour
         tmp.color              = color;
         tmp.alignment          = align;
         tmp.textWrappingMode = TextWrappingModes.Normal;
+        tmp.overflowMode = TextOverflowModes.Truncate;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;

@@ -45,7 +45,6 @@ public class PuzzleManager : MonoBehaviour
     [SerializeField] Vector3 keyGrabAttachLocalEuler = new Vector3(0f, 0f, 90f);
 
     [Header("Door guidance (on key pickup)")]
-    [SerializeField] bool enableDoorGuidanceOnKeyPickup = true;
     [SerializeField] Color doorGuideColor = new Color(1f, 0.88f, 0.45f, 1f);
     [SerializeField] float doorGuideSpotIntensity = 0.45f;
     [SerializeField] float doorGuideSpotRange = 4.6f;
@@ -66,6 +65,17 @@ public class PuzzleManager : MonoBehaviour
     [SerializeField] float keyGuideAngle = 46f;
     [SerializeField] Vector3 keyGuideOffset = new Vector3(0.22f, 0.30f, 0.20f);
 
+    [Header("Clue 3 clock focus lighting")]
+    [SerializeField] bool enableClockFocusAfterClue3 = true;
+    [SerializeField] Vector3 clockFocusSpotOffset = new Vector3(0f, 0.75f, 0.12f);
+    [SerializeField] Color clockFocusColor = new Color(1f, 0.93f, 0.78f, 1f);
+    [SerializeField] float clockFocusSpotIntensity = 3.0f;
+    [SerializeField] float clockFocusSpotRange = 4.5f;
+    [SerializeField] float clockFocusSpotAngle = 36f;
+    [SerializeField] float clockFocusAmbientColorScale = 0.34f;
+    [SerializeField] float clockFocusAmbientIntensityScale = 0.30f;
+    [SerializeField] float clockFocusOtherLightIntensityScale = 0.12f;
+
     [Header("Progress toast placement (head-relative)")]
     [SerializeField] float notifForwardMeters = 0.48f;
     [SerializeField] float notifRightMeters = 0.06f;
@@ -82,11 +92,11 @@ public class PuzzleManager : MonoBehaviour
     public static int DecoyInteractionCount => _instance != null ? _instance._decoyInteractions : 0;
 
     // ── Colours ───────────────────────────────────────────────────────────────
-    static readonly Color BgDark      = new Color(0.07f, 0.08f, 0.13f, 0.95f);
-    static readonly Color AccentGold  = new Color(1.00f, 0.84f, 0.18f, 1.00f);
-    static readonly Color AccentGreen = new Color(0.18f, 0.78f, 0.40f, 1.00f);
-    static readonly Color AccentBlue  = new Color(0.25f, 0.55f, 0.95f, 1.00f);
-    static readonly Color TextPrimary = new Color(0.94f, 0.94f, 1.00f, 1.00f);
+    static readonly Color BgDark      = MenuThemes.Completion.Background;
+    static readonly Color AccentGold  = MenuThemes.Completion.AccentPrimary;
+    static readonly Color AccentGreen = MenuThemes.Completion.AccentSuccess;
+    static readonly Color AccentBlue  = MenuThemes.Completion.AccentInfo;
+    static readonly Color TextPrimary = MenuThemes.Completion.TextPrimary;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private static PuzzleManager _instance;
@@ -95,6 +105,7 @@ public class PuzzleManager : MonoBehaviour
     private readonly HashSet<string> _seenDecoyIds = new HashSet<string>();
     private int _decoyInteractions;
     private bool _decoyGramophoneUnlocked;
+    private bool _decoyTelescopeUnlocked;
     private bool       _puzzleComplete = false;
 
     // Notification HUD
@@ -109,6 +120,15 @@ public class PuzzleManager : MonoBehaviour
     private Light _doorGuideHingeFill;
     private Light _doorGuideHingePulseSpot;
     private Light _keyGuideSpot;
+    private readonly List<Light> _clockFocusSpots = new List<Light>(8);
+    private readonly Dictionary<Light, float> _clockLightIntensityBeforeFocus = new Dictionary<Light, float>(128);
+    private Color _ambientSkyBeforeClockFocus;
+    private Color _ambientEqBeforeClockFocus;
+    private Color _ambientGroundBeforeClockFocus;
+    private Color _ambientFlatBeforeClockFocus;
+    private float _ambientIntensityBeforeClockFocus;
+    private bool _clockFocusLightingActive;
+    private bool _clockFocusLightingSnapshotReady;
     private Vector3 _doorGuideTargetWorld;
     private bool _hasDoorGuideTarget;
     private bool _doorGuidanceActive;
@@ -140,6 +160,7 @@ public class PuzzleManager : MonoBehaviour
 
     void OnDestroy()
     {
+        RestoreLightingAfterClockFocus();
         UnsubscribeKeyGrabGuidance();
         if (_keyGuideSpot != null)
             Destroy(_keyGuideSpot.gameObject);
@@ -151,10 +172,12 @@ public class PuzzleManager : MonoBehaviour
     // ── Scene reload reset ────────────────────────────────────────────────────
     void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        RestoreLightingAfterClockFocus();
         _solvedClues.Clear();
         _seenDecoyIds.Clear();
         _decoyInteractions = 0;
         _decoyGramophoneUnlocked = false;
+        _decoyTelescopeUnlocked = false;
         _puzzleComplete = false;
         if (_notifPanel != null) _notifPanel.SetActive(false);
 
@@ -203,6 +226,7 @@ public class PuzzleManager : MonoBehaviour
         return pathId switch
         {
             "gramophone" => _instance._decoyGramophoneUnlocked,
+            "telescope" => _instance._decoyTelescopeUnlocked,
             _ => true
         };
     }
@@ -211,6 +235,12 @@ public class PuzzleManager : MonoBehaviour
     {
         if (_instance == null || string.IsNullOrEmpty(decoyId)) return;
         _instance.HandleDecoyInteraction(decoyId, source);
+    }
+
+    public static void UnlockDecoyPath(string pathId, Object source = null)
+    {
+        if (_instance == null || string.IsNullOrEmpty(pathId)) return;
+        _instance.HandleDecoyPathUnlock(pathId, source);
     }
 
     public static void ShowOutOfTurnFeedback(string bodyText)
@@ -233,8 +263,44 @@ public class PuzzleManager : MonoBehaviour
 
         if (decoyId == "decoy_note")
             _decoyGramophoneUnlocked = true;
+        if (decoyId == "decoy_globe")
+            _decoyTelescopeUnlocked = true;
+
+        StartCoroutine(ShowDecoyNotificationDelayed(decoyId, 2f));
 
         Debug.Log($"[PuzzleManager] Decoy hit '{decoyId}' from '{(source != null ? source.name : "unknown")}'.");
+    }
+
+    IEnumerator ShowDecoyNotificationDelayed(string decoyId, float delaySeconds)
+    {
+        yield return new WaitForSeconds(Mathf.Max(0f, delaySeconds));
+        ShowNotification(
+            "DECOY CLUE",
+            GetDecoyRecoveryMessage(decoyId),
+            AccentGold, autoDismissSeconds: 4.5f);
+    }
+
+    void HandleDecoyPathUnlock(string pathId, Object source)
+    {
+        bool changed = false;
+        switch (pathId)
+        {
+            case "gramophone":
+                if (!_decoyGramophoneUnlocked) { _decoyGramophoneUnlocked = true; changed = true; }
+                break;
+            case "telescope":
+                if (!_decoyTelescopeUnlocked) { _decoyTelescopeUnlocked = true; changed = true; }
+                break;
+        }
+
+        if (changed)
+            Debug.Log($"[PuzzleManager] Decoy path unlocked '{pathId}' from '{(source != null ? source.name : "unknown")}'.");
+    }
+
+    static string GetDecoyRecoveryMessage(string decoyId)
+    {
+        _ = decoyId;
+        return "Dead end. Go back to your previous confirmed clue and try the other nearby object.";
     }
 
     IEnumerator HideKeyNextFrame()
@@ -380,8 +446,10 @@ public class PuzzleManager : MonoBehaviour
 
     void OnKeyPickedUp(SelectEnterEventArgs _)
     {
+        RestoreLightingAfterClockFocus();
         SetDoorGuidanceEnabled(true);
         SetKeyGuideLightEnabled(true);
+        GameAudioFeedback.PlayKeyAcquired();
         ShowNotification(
             "QUEST UPDATED",
             "Move to the pulsating hinge light and use the key to complete your escape.",
@@ -483,6 +551,7 @@ public class PuzzleManager : MonoBehaviour
         // With sequential gating, clue 3 implies clue 1+2 are already done.
         if (clueIndex == 3 && keyObject != null && !keyObject.activeSelf)
         {
+            ApplyClockFocusLighting();
             ShowNotification(
                 "FINAL STEP",
                 "Open the clock to reveal the key.",
@@ -492,6 +561,7 @@ public class PuzzleManager : MonoBehaviour
         if (solved < RequiredClues.Length)
         {
             // Intermediate progress toast
+            GameAudioFeedback.PlayClueComplete();
             ShowNotification(
                 $"Clue {solved} / {RequiredClues.Length} Solved",
                 GetProgressMessage(solved),
@@ -501,6 +571,7 @@ public class PuzzleManager : MonoBehaviour
 
         // All required clues solved
         _puzzleComplete = true;
+        GameAudioFeedback.PlayClueComplete();
         ShowNotification(
             "ALL CLUES SOLVED!",
             "Find the key behind the clock and bring it to the door.",
@@ -532,6 +603,155 @@ public class PuzzleManager : MonoBehaviour
             2 => "Almost there — one clue remains.",
             _ => "Keep going..."
         };
+    }
+
+    void ApplyClockFocusLighting()
+    {
+        if (!enableClockFocusAfterClue3 || _clockFocusLightingActive)
+            return;
+
+        var clocks = FindClockTargets();
+        if (clocks.Count == 0)
+            return;
+
+        _ambientSkyBeforeClockFocus = RenderSettings.ambientSkyColor;
+        _ambientEqBeforeClockFocus = RenderSettings.ambientEquatorColor;
+        _ambientGroundBeforeClockFocus = RenderSettings.ambientGroundColor;
+        _ambientFlatBeforeClockFocus = RenderSettings.ambientLight;
+        _ambientIntensityBeforeClockFocus = RenderSettings.ambientIntensity;
+        _clockFocusLightingSnapshotReady = true;
+
+        RenderSettings.ambientSkyColor = ScaleRgb(_ambientSkyBeforeClockFocus, clockFocusAmbientColorScale);
+        RenderSettings.ambientEquatorColor = ScaleRgb(_ambientEqBeforeClockFocus, clockFocusAmbientColorScale);
+        RenderSettings.ambientGroundColor = ScaleRgb(_ambientGroundBeforeClockFocus, clockFocusAmbientColorScale);
+        RenderSettings.ambientLight = ScaleRgb(_ambientFlatBeforeClockFocus, clockFocusAmbientColorScale);
+        RenderSettings.ambientIntensity = Mathf.Max(0f, _ambientIntensityBeforeClockFocus * clockFocusAmbientIntensityScale);
+
+        _clockLightIntensityBeforeFocus.Clear();
+        var allLights = Object.FindObjectsByType<Light>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        foreach (var L in allLights)
+        {
+            if (L == null) continue;
+            if (!_clockLightIntensityBeforeFocus.ContainsKey(L))
+                _clockLightIntensityBeforeFocus.Add(L, L.intensity);
+            if (!IsClockLight(L.transform))
+                L.intensity = Mathf.Max(0.0001f, L.intensity * clockFocusOtherLightIntensityScale);
+        }
+
+        for (int i = 0; i < clocks.Count; i++)
+        {
+            var target = clocks[i];
+            var pos = GetClockFocusPoint(target);
+            var go = new GameObject($"ClockFocusSpot_{i + 1}");
+            var spot = go.AddComponent<Light>();
+            spot.type = LightType.Spot;
+            spot.color = clockFocusColor;
+            spot.intensity = clockFocusSpotIntensity;
+            spot.range = clockFocusSpotRange;
+            spot.spotAngle = clockFocusSpotAngle;
+            spot.shadows = LightShadows.None;
+            go.transform.position = pos + clockFocusSpotOffset;
+            var dir = pos - go.transform.position;
+            if (dir.sqrMagnitude < 0.0001f) dir = Vector3.down;
+            go.transform.rotation = Quaternion.LookRotation(dir.normalized, Vector3.up);
+            _clockFocusSpots.Add(spot);
+        }
+
+        _clockFocusLightingActive = true;
+    }
+
+    void RestoreLightingAfterClockFocus()
+    {
+        if (!_clockFocusLightingActive && !_clockFocusLightingSnapshotReady && _clockFocusSpots.Count == 0)
+            return;
+
+        foreach (var kv in _clockLightIntensityBeforeFocus)
+        {
+            if (kv.Key != null)
+                kv.Key.intensity = kv.Value;
+        }
+        _clockLightIntensityBeforeFocus.Clear();
+
+        if (_clockFocusLightingSnapshotReady)
+        {
+            RenderSettings.ambientSkyColor = _ambientSkyBeforeClockFocus;
+            RenderSettings.ambientEquatorColor = _ambientEqBeforeClockFocus;
+            RenderSettings.ambientGroundColor = _ambientGroundBeforeClockFocus;
+            RenderSettings.ambientLight = _ambientFlatBeforeClockFocus;
+            RenderSettings.ambientIntensity = _ambientIntensityBeforeClockFocus;
+        }
+
+        for (int i = 0; i < _clockFocusSpots.Count; i++)
+        {
+            if (_clockFocusSpots[i] != null)
+                Destroy(_clockFocusSpots[i].gameObject);
+        }
+        _clockFocusSpots.Clear();
+        _clockFocusLightingSnapshotReady = false;
+        _clockFocusLightingActive = false;
+    }
+
+    List<Transform> FindClockTargets()
+    {
+        var targets = new List<Transform>(8);
+        foreach (var t in Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (t == null) continue;
+            var n = t.name.ToLowerInvariant();
+            if (!n.Contains("clock")) continue;
+            if (n.Contains("spot") || n.Contains("light")) continue;
+            if (!IsTopmostClockTransform(t))
+                continue;
+            if (t.GetComponentInChildren<Renderer>(true) == null)
+                continue;
+            targets.Add(t);
+        }
+        return targets;
+    }
+
+    static bool IsTopmostClockTransform(Transform t)
+    {
+        if (t == null) return false;
+        var p = t.parent;
+        while (p != null)
+        {
+            if (p.name.ToLowerInvariant().Contains("clock"))
+                return false;
+            p = p.parent;
+        }
+        return true;
+    }
+
+    static bool IsClockLight(Transform lightTransform)
+    {
+        if (lightTransform == null) return false;
+        var t = lightTransform;
+        for (int i = 0; i < 6 && t != null; i++)
+        {
+            var n = t.name.ToLowerInvariant();
+            if (n.Contains("clock")) return true;
+            t = t.parent;
+        }
+        return false;
+    }
+
+    static Vector3 GetClockFocusPoint(Transform target)
+    {
+        if (target == null) return Vector3.zero;
+        var renderers = target.GetComponentsInChildren<Renderer>(true);
+        if (renderers != null && renderers.Length > 0)
+        {
+            var b = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+                b.Encapsulate(renderers[i].bounds);
+            return b.center;
+        }
+        return target.position;
+    }
+
+    static Color ScaleRgb(Color color, float scale)
+    {
+        return new Color(color.r * scale, color.g * scale, color.b * scale, color.a);
     }
 
     // ── Notification UI ───────────────────────────────────────────────────────
@@ -750,7 +970,7 @@ public class PuzzleManager : MonoBehaviour
         _titleText                 = titleObj.AddComponent<TextMeshProUGUI>();
         _titleText.text            = "";
         _titleText.fontSize        = 0.048f;
-        _titleText.fontStyle       = FontStyles.Bold;
+        _titleText.fontStyle       = MenuThemes.Typography.Header;
         _titleText.color           = AccentGold;
         _titleText.alignment       = TextAlignmentOptions.Center;
         _titleText.textWrappingMode = TextWrappingModes.NoWrap;
@@ -767,6 +987,7 @@ public class PuzzleManager : MonoBehaviour
         _bodyText.fontSize        = 0.030f;
         _bodyText.color           = TextPrimary;
         _bodyText.alignment       = TextAlignmentOptions.Center;
+        _bodyText.fontStyle       = MenuThemes.Typography.Body;
         _bodyText.textWrappingMode = TextWrappingModes.Normal;
         var bort = bodyObj.GetComponent<RectTransform>();
         bort.anchorMin = bort.anchorMax = bort.pivot = new Vector2(0.5f, 0.5f);

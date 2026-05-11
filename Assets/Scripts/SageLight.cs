@@ -258,6 +258,22 @@ public class SageLight : MonoBehaviour
             if (spawnSpotFillsOnInteractableTargets)
                 AddRuntimeSpotAimedAt(rng, pos + spotAimWorldOffset);
         }
+
+        foreach (var dg in UnityEngine.Object.FindObjectsByType<DecoyGlobeReveal>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            var pos = dg.transform.position + clueLightWorldOffset;
+            AddRuntimePoint(pos);
+            if (spawnSpotFillsOnInteractableTargets)
+                AddRuntimeSpotAimedAt(rng, pos + spotAimWorldOffset);
+        }
+
+        foreach (var dt in UnityEngine.Object.FindObjectsByType<DecoyTelescopeReveal>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            var pos = dt.transform.position + clueLightWorldOffset;
+            AddRuntimePoint(pos);
+            if (spawnSpotFillsOnInteractableTargets)
+                AddRuntimeSpotAimedAt(rng, pos + spotAimWorldOffset);
+        }
     }
 
     void SpawnRandomFillLights(System.Random rng)

@@ -47,8 +47,8 @@ public class GlobeClueReveal : MonoBehaviour
     [Header("Clue")]
     [TextArea(2, 5)]
     [SerializeField] string m_ClueText =
-        "Time stands still for those who look closely —\n" +
-        "the face on the wall knows what lies behind it.";
+        "When the world settles, listen for stillness on the wall.\n" +
+        "More than one face keeps time, but only one reveals what is hidden.";
 
     public int clueIndex = 3;
 
@@ -146,7 +146,14 @@ public class GlobeClueReveal : MonoBehaviour
             _promptRoot.gameObject.SetActive(unlocked && inZone && !panelOpen);
         }
 
-        if (!unlocked || !pressedEdge || !inZone) return;
+        if (!pressedEdge || !inZone) return;
+        if (!unlocked)
+        {
+            InteractableHapticFeedback.ShowWrongOrderCue(transform);
+            return;
+        }
+
+        InteractableHapticFeedback.ShowTargetFlashCue(transform, true);
         if (_triggered)
         {
             if (_progressSent && (_cluePanel == null || !_cluePanel.activeSelf))
@@ -270,6 +277,7 @@ public class GlobeClueReveal : MonoBehaviour
         _gotItBtn.onClick.RemoveAllListeners();
         _gotItBtn.onClick.AddListener(Dismiss);
         StartCoroutine(EnableGotItAfterDelay(0.75f));
+        GameAudioFeedback.PlayCorrectSelection();
     }
 
     void ShowClueAfterSolved()
@@ -518,6 +526,7 @@ public class GlobeClueReveal : MonoBehaviour
         tmp.color              = color;
         tmp.alignment          = align;
         tmp.textWrappingMode = TextWrappingModes.Normal;
+        tmp.overflowMode = TextOverflowModes.Truncate;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;

@@ -15,6 +15,13 @@ public sealed class VROnboardingOverlay : MonoBehaviour
     Canvas _canvas;
     GameObject _panel;
     bool _prevLeftPrimary;
+    int _pageIndex;
+    TextMeshProUGUI _titleText;
+    TextMeshProUGUI _bodyText;
+    TextMeshProUGUI _pageText;
+    Button _nextButton;
+    Button _prevButton;
+    Button _closeButton;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
@@ -55,7 +62,11 @@ public sealed class VROnboardingOverlay : MonoBehaviour
         if (_panel == null) return;
         _panel.SetActive(!_panel.activeSelf);
         if (_panel.activeSelf)
+        {
             PositionPanel();
+            _pageIndex = 0;
+            RefreshPage();
+        }
         if (debugPlacement && _panel.activeSelf && Camera.main != null)
         {
             var c = Camera.main.transform;
@@ -65,6 +76,7 @@ public sealed class VROnboardingOverlay : MonoBehaviour
         }
 
         XrHaptics.PulseLeft(0.3f, 0.04f);
+        GameAudioFeedback.PlayMenuSelect();
     }
 
     [Header("Panel placement (camera-relative)")]
@@ -73,6 +85,44 @@ public sealed class VROnboardingOverlay : MonoBehaviour
     [SerializeField] float panelUpMeters = 0.02f;
     [Tooltip("Log position when you open this card (paste Console if it clips).")]
     [SerializeField] bool debugPlacement;
+
+    readonly (string title, string body)[] _pages = new[]
+    {
+        (
+            "Core Controls",
+            "<b>Left X</b>: open/close onboarding\n" +
+            "<b>Left Y</b>: open/close timer + hints menu\n" +
+            "<b>Move</b>: left thumbstick   <b>Turn</b>: right thumbstick (snap)\n" +
+            "<b>Teleport</b>: aim at floor, then trigger\n\n" +
+            "Hint menu also shows your remaining time and updates clue progress."
+        ),
+        (
+            "Start at Sage Statue",
+            "Your first action should be interacting with the <b>Sage statue</b>.\n" +
+            "It activates guidance lighting and reveals important search zones.\n\n" +
+            "If you feel lost later, return to Sage-lit regions before guessing random objects."
+        ),
+        (
+            "Interaction Types",
+            "<b>Select (trigger)</b> = reveal/mechanism actions\n" +
+            "Examples: sliding seats, rotating clocks, globe spin.\n\n" +
+            "<b>Grab (grip)</b> = object handling/read actions\n" +
+            "Examples: picking up books/keys, reading clue notes, decoy branch checks."
+        ),
+        (
+            "Feedback Language",
+            "<b>Green mesh flash</b>: clue-related or valid path object\n" +
+            "<b>Red mesh flash</b>: irrelevant object\n" +
+            "<b>Yellow flash</b>: right object but wrong order\n\n" +
+            "Use these colors as quick validation before spending time on an interaction."
+        ),
+        (
+            "Puzzle Flow",
+            "Clues unlock sequentially: clue 1 -> clue 2 -> clue 3.\n" +
+            "Some clues are intentionally ambiguous and may branch into decoys.\n\n" +
+            "If a branch feels wrong, backtrack to your last confirmed clue and test the nearest alternative."
+        )
+    };
 
     void PositionPanel()
     {
@@ -127,17 +177,17 @@ public sealed class VROnboardingOverlay : MonoBehaviour
 
         var title = new GameObject("Title");
         title.transform.SetParent(_panel.transform, false);
-        var t = title.AddComponent<TextMeshProUGUI>();
-        t.text = "How to play — press left X button";
-        t.fontSize = 0.044f;
-        t.fontStyle = FontStyles.Bold;
-        t.alignment = TextAlignmentOptions.Center;
-        t.color = MenuThemes.Hud.TextPrimary;
-        t.enableAutoSizing = true;
-        t.fontSizeMin = 0.028f;
-        t.fontSizeMax = 0.044f;
-        t.textWrappingMode = TextWrappingModes.Normal;
-        t.overflowMode = TextOverflowModes.Truncate;
+        _titleText = title.AddComponent<TextMeshProUGUI>();
+        _titleText.text = "Onboarding";
+        _titleText.fontSize = 0.044f;
+        _titleText.fontStyle = MenuThemes.Typography.Header;
+        _titleText.alignment = TextAlignmentOptions.Center;
+        _titleText.color = MenuThemes.Hud.TextPrimary;
+        _titleText.enableAutoSizing = true;
+        _titleText.fontSizeMin = 0.028f;
+        _titleText.fontSizeMax = 0.044f;
+        _titleText.textWrappingMode = TextWrappingModes.Normal;
+        _titleText.overflowMode = TextOverflowModes.Truncate;
         var trt = title.GetComponent<RectTransform>();
         trt.anchorMin = new Vector2(0.04f, 0.88f);
         trt.anchorMax = new Vector2(0.96f, 0.98f);
@@ -146,30 +196,106 @@ public sealed class VROnboardingOverlay : MonoBehaviour
 
         var body = new GameObject("Body");
         body.transform.SetParent(_panel.transform, false);
-        var b = body.AddComponent<TextMeshProUGUI>();
-        b.text =
-            "<b>Open this help anytime with Left X.</b>\n\n" +
-            "<b>Start here:</b> Find the <b>Sage statue</b> in the room. Touch or interact with it first — it lights important spots and guides you to all clues in order. Return to it whenever you feel stuck.\n\n" +
-            "Move: left thumbstick. Turn: right thumbstick (snap).\n\n" +
-            "Teleport: aim at the floor and use the trigger when you see the arc.\n\n" +
-            "Clues unlock one at a time. Hints: press <b>left Y</b> to open the timer HUD, then use <b>Hint 1 / Hint 2</b> (grip near the row or use the controller ray).\n\n" +
-            "<b>Left X</b> opens and closes this card (keyboard <b>O</b> in Editor). <b>Left Y</b> toggles the timer HUD (<b>H</b> in Editor). This help starts hidden — open it whenever you need a reminder.";
-        b.fontSize = 0.023f;
-        b.enableAutoSizing = true;
-        b.fontSizeMin = 0.016f;
-        b.fontSizeMax = 0.023f;
-        b.alignment = TextAlignmentOptions.TopLeft;
-        b.color = MenuThemes.Hud.TextSecondary;
-        b.textWrappingMode = TextWrappingModes.Normal;
-        b.overflowMode = TextOverflowModes.Truncate;
-        b.lineSpacing = 0.2f;
-        b.paragraphSpacing = 0.65f;
-        b.margin = new Vector4(0.008f, 0.008f, 0.008f, 0.008f);
-        b.richText = true;
+        _bodyText = body.AddComponent<TextMeshProUGUI>();
+        _bodyText.fontSize = 0.023f;
+        _bodyText.enableAutoSizing = true;
+        _bodyText.fontSizeMin = 0.016f;
+        _bodyText.fontSizeMax = 0.023f;
+        _bodyText.alignment = TextAlignmentOptions.TopLeft;
+        _bodyText.color = MenuThemes.Hud.TextSecondary;
+        _bodyText.textWrappingMode = TextWrappingModes.Normal;
+        _bodyText.overflowMode = TextOverflowModes.Truncate;
+        _bodyText.lineSpacing = 0.2f;
+        _bodyText.paragraphSpacing = 0.6f;
+        _bodyText.margin = new Vector4(0.008f, 0.008f, 0.008f, 0.008f);
+        _bodyText.richText = true;
         var brt = body.GetComponent<RectTransform>();
-        brt.anchorMin = new Vector2(0.06f, 0.05f);
-        brt.anchorMax = new Vector2(0.94f, 0.87f);
+        brt.anchorMin = new Vector2(0.06f, 0.19f);
+        brt.anchorMax = new Vector2(0.94f, 0.86f);
         brt.offsetMin = Vector2.zero;
         brt.offsetMax = Vector2.zero;
+
+        var footer = new GameObject("Footer");
+        footer.transform.SetParent(_panel.transform, false);
+        var frt = footer.AddComponent<RectTransform>();
+        frt.anchorMin = new Vector2(0.06f, 0.05f);
+        frt.anchorMax = new Vector2(0.94f, 0.17f);
+        frt.offsetMin = Vector2.zero;
+        frt.offsetMax = Vector2.zero;
+
+        _prevButton = CreateFooterButton(footer.transform, "Prev", new Vector2(-0.16f, 0f), OnPrevPage);
+        _nextButton = CreateFooterButton(footer.transform, "Next", new Vector2(0.00f, 0f), OnNextPage);
+        _closeButton = CreateFooterButton(footer.transform, "Close", new Vector2(0.16f, 0f), TogglePanel);
+
+        var pageObj = new GameObject("PageIndicator");
+        pageObj.transform.SetParent(footer.transform, false);
+        _pageText = pageObj.AddComponent<TextMeshProUGUI>();
+        _pageText.alignment = TextAlignmentOptions.Center;
+        _pageText.fontSize = 0.019f;
+        _pageText.color = MenuThemes.Hud.TextSecondary;
+        var pr = pageObj.GetComponent<RectTransform>();
+        pr.anchorMin = new Vector2(0.34f, -0.28f);
+        pr.anchorMax = new Vector2(0.66f, -0.02f);
+        pr.offsetMin = Vector2.zero;
+        pr.offsetMax = Vector2.zero;
+
+        RefreshPage();
+    }
+
+    Button CreateFooterButton(Transform parent, string label, Vector2 anchoredPos, UnityEngine.Events.UnityAction onClick)
+    {
+        var obj = new GameObject(label + "Btn");
+        obj.transform.SetParent(parent, false);
+        var img = obj.AddComponent<Image>();
+        img.color = MenuThemes.Hud.AccentSecondary;
+        var btn = obj.AddComponent<Button>();
+        var rt = obj.GetComponent<RectTransform>();
+        rt.sizeDelta = new Vector2(0.14f, 0.052f);
+        rt.anchoredPosition = anchoredPos;
+
+        var txtObj = new GameObject("Label");
+        txtObj.transform.SetParent(obj.transform, false);
+        var tmp = txtObj.AddComponent<TextMeshProUGUI>();
+        tmp.text = label.ToUpperInvariant();
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.fontStyle = MenuThemes.Typography.Emphasis;
+        tmp.fontSize = 0.020f;
+        tmp.color = Color.white;
+        var tr = txtObj.GetComponent<RectTransform>();
+        tr.anchorMin = Vector2.zero;
+        tr.anchorMax = Vector2.one;
+        tr.offsetMin = Vector2.zero;
+        tr.offsetMax = Vector2.zero;
+
+        btn.onClick.AddListener(onClick);
+        ClueUiLayout.WireGotItButtonForXrDirectSelect(btn);
+        return btn;
+    }
+
+    void OnNextPage()
+    {
+        _pageIndex = Mathf.Min(_pages.Length - 1, _pageIndex + 1);
+        GameAudioFeedback.PlayMenuSelect();
+        XrHaptics.PulseLeft(0.28f, 0.03f);
+        RefreshPage();
+    }
+
+    void OnPrevPage()
+    {
+        _pageIndex = Mathf.Max(0, _pageIndex - 1);
+        GameAudioFeedback.PlayMenuSelect();
+        XrHaptics.PulseLeft(0.24f, 0.03f);
+        RefreshPage();
+    }
+
+    void RefreshPage()
+    {
+        if (_pages == null || _pages.Length == 0) return;
+        _pageIndex = Mathf.Clamp(_pageIndex, 0, _pages.Length - 1);
+        if (_titleText != null) _titleText.text = _pages[_pageIndex].title;
+        if (_bodyText != null) _bodyText.text = _pages[_pageIndex].body;
+        if (_pageText != null) _pageText.text = $"Page {_pageIndex + 1}/{_pages.Length}";
+        if (_prevButton != null) _prevButton.interactable = _pageIndex > 0;
+        if (_nextButton != null) _nextButton.interactable = _pageIndex < _pages.Length - 1;
     }
 }
