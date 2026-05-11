@@ -11,7 +11,7 @@ using UnityEngine.XR;
 /// Behaviour:
 ///   - Right hand enters the zone + grip pressed → globe spins.
 ///   - After the spin completes → clue popup appears in front of the headset.
-///   - "GOT IT" dismisses the popup and fires OnClueSolved(clueIndex).
+///   - "GOT IT" dismisses the popup and reports completion to PuzzleManager.
 ///
 /// Setup:
 ///   1. Attach this script to the Globe GameObject.
@@ -29,6 +29,8 @@ public class GlobeClueReveal : MonoBehaviour
 
     [Tooltip("Right hand controller. Auto-finds 'RightHandController' if blank.")]
     [SerializeField] Transform  m_RightController;
+    [Tooltip("Left hand controller. Auto-finds 'LeftHandController' if blank.")]
+    [SerializeField] Transform  m_LeftController;
 
     [Tooltip("The sphere child to spin. Leave blank to spin the whole Globe.")]
     [SerializeField] Transform  m_GlobeSphere;
@@ -50,17 +52,14 @@ public class GlobeClueReveal : MonoBehaviour
 
     public int clueIndex = 3;
 
-    /// <summary>Fired once when the player dismisses this clue.</summary>
-    public static event System.Action<int> OnClueSolved;
-
     // ── Colours ───────────────────────────────────────────────────────────────
-    static readonly Color BgPaper   = new Color(0.96f, 0.93f, 0.84f, 0.98f);
-    static readonly Color HeaderCol = new Color(0.20f, 0.14f, 0.08f, 1.00f);
-    static readonly Color InkFaded  = new Color(0.45f, 0.32f, 0.14f, 0.80f);
-    static readonly Color Ink       = new Color(0.12f, 0.10f, 0.08f, 1.00f);
-    static readonly Color BtnCol    = new Color(0.25f, 0.18f, 0.10f, 1.00f);
-    static readonly Color BtnText   = new Color(0.92f, 0.87f, 0.75f, 1.00f);
-    static readonly Color PromptCol = new Color(1.00f, 0.92f, 0.40f, 1.00f);
+    static readonly Color BgPaper   = MenuThemes.Clue.Background;
+    static readonly Color HeaderCol = MenuThemes.Clue.Header;
+    static readonly Color InkFaded  = MenuThemes.Clue.InkMuted;
+    static readonly Color Ink       = MenuThemes.Clue.Ink;
+    static readonly Color BtnCol    = MenuThemes.Clue.Button;
+    static readonly Color BtnText   = MenuThemes.Clue.ButtonText;
+    static readonly Color PromptCol = MenuThemes.Clue.Prompt;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Canvas     _clueCanvas;
@@ -68,8 +67,17 @@ public class GlobeClueReveal : MonoBehaviour
     private Button     _gotItBtn;
     private Transform  _promptRoot;
     private bool       _triggered = false;
+    private bool       _progressSent;
     private bool       _prevGrip  = false;
     private Coroutine  _spinRoutine;
+    private bool       _fading;
+    private float      _nearCloseAccum;
+
+    [Header("Dismiss")]
+    [SerializeField] float panelFadeInSeconds = 0.25f;
+    [SerializeField] float panelFadeOutSeconds = 0.55f;
+    [SerializeField] float nearCloseDismissHoldSeconds = 0.72f;
+    [SerializeField] float nearCloseBoundsExpand = 0.12f;
 
     // ── Awake ─────────────────────────────────────────────────────────────────
     void Awake()
@@ -98,6 +106,13 @@ public class GlobeClueReveal : MonoBehaviour
             else
                 Debug.LogWarning("GlobeClueReveal: assign Right Controller in the Inspector.");
         }
+
+        if (m_LeftController == null)
+        {
+            var go = GameObject.Find("LeftHandController");
+            if (go != null)
+                m_LeftController = go.transform;
+        }
     }
 
     void Start()
@@ -110,16 +125,10 @@ public class GlobeClueReveal : MonoBehaviour
     // ── Update ────────────────────────────────────────────────────────────────
     void Update()
     {
-        // Show / hide SPIN prompt based on proximity
-        if (_promptRoot != null && !_triggered)
-        {
-            bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
-            bool inRange   = m_Zone != null && m_RightController != null &&
-                             IsInsideZone(m_Zone, m_RightController.position);
-            _promptRoot.gameObject.SetActive(inRange && !panelOpen);
-        }
+        if (_cluePanel != null && _cluePanel.activeSelf)
+            UpdateNearCloseDismiss();
 
-        if (_triggered || m_Zone == null || m_RightController == null) return;
+        if (m_Zone == null || m_RightController == null) return;
 
         var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
         if (!device.isValid) return;
@@ -127,12 +136,52 @@ public class GlobeClueReveal : MonoBehaviour
 
         bool pressedEdge = grip && !_prevGrip;
         _prevGrip = grip;
+        bool inZone = IsInsideZone(m_Zone, m_RightController.position);
 
-        if (!pressedEdge) return;
-        if (!IsInsideZone(m_Zone, m_RightController.position)) return;
+        // Show / hide SPIN prompt based on proximity
+        if (_promptRoot != null && !_triggered)
+        {
+            bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
+            _promptRoot.gameObject.SetActive(inZone && !panelOpen);
+        }
+
+        if (!pressedEdge || !inZone) return;
+        if (_triggered)
+        {
+            if (_progressSent && (_cluePanel == null || !_cluePanel.activeSelf))
+                ShowClueAfterSolved();
+            return;
+        }
 
         if (_spinRoutine != null) StopCoroutine(_spinRoutine);
         _spinRoutine = StartCoroutine(SpinAndReveal());
+    }
+
+    void UpdateNearCloseDismiss()
+    {
+        if (_fading || _gotItBtn == null || !_gotItBtn.interactable)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var box = _gotItBtn.GetComponent<BoxCollider>();
+        if (box == null)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var b = box.bounds;
+        b.Expand(nearCloseBoundsExpand);
+        bool near = false;
+        if (m_RightController != null) near |= b.Contains(m_RightController.position);
+        if (m_LeftController != null) near |= b.Contains(m_LeftController.position);
+        if (near) _nearCloseAccum += Time.deltaTime;
+        else _nearCloseAccum = 0f;
+
+        if (_nearCloseAccum >= nearCloseDismissHoldSeconds)
+            HandleCloseIntent();
     }
 
     void LateUpdate()
@@ -151,7 +200,7 @@ public class GlobeClueReveal : MonoBehaviour
         // Clue panel follows headset
         if (_cluePanel != null && _cluePanel.activeSelf)
         {
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
     }
@@ -181,22 +230,44 @@ public class GlobeClueReveal : MonoBehaviour
             startRot * Quaternion.AngleAxis(totalAngle % 360f, Vector3.up);
 
         _spinRoutine = null;
-        ShowClue();
+        ShowClueFirstTime();
     }
 
     // ── Clue popup ────────────────────────────────────────────────────────────
-    void ShowClue()
+    void ShowClueFirstTime()
     {
         _cluePanel.SetActive(true);
+        ResetPanelCanvasGroup();
+        StartCoroutine(FadeInPanelCoroutine());
 
         if (Camera.main != null)
         {
             Transform cam = Camera.main.transform;
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
 
-        StartCoroutine(EnableGotItAfterDelay(5f));
+        _gotItBtn.onClick.RemoveAllListeners();
+        _gotItBtn.onClick.AddListener(Dismiss);
+        StartCoroutine(EnableGotItAfterDelay(0.75f));
+    }
+
+    void ShowClueAfterSolved()
+    {
+        _cluePanel.SetActive(true);
+        ResetPanelCanvasGroup();
+        StartCoroutine(FadeInPanelCoroutine());
+
+        if (Camera.main != null)
+        {
+            Transform cam = Camera.main.transform;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
+            _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
+        }
+
+        _gotItBtn.onClick.RemoveAllListeners();
+        _gotItBtn.onClick.AddListener(HidePanelOnly);
+        _gotItBtn.interactable = true;
     }
 
     IEnumerator EnableGotItAfterDelay(float delay)
@@ -208,8 +279,89 @@ public class GlobeClueReveal : MonoBehaviour
 
     void Dismiss()
     {
+        if (_progressSent || _fading) return;
+        _progressSent = true;
+        StartCoroutine(FadeOutPanelCoroutine(true));
+    }
+
+    void HidePanelOnly()
+    {
+        if (_fading) return;
+        StartCoroutine(FadeOutPanelCoroutine(false));
+    }
+
+    void HandleCloseIntent()
+    {
+        if (_progressSent) HidePanelOnly();
+        else Dismiss();
+    }
+
+    IEnumerator FadeOutPanelCoroutine(bool fireSolvedEvent)
+    {
+        _fading = true;
+        _nearCloseAccum = 0f;
+        var grip = _gotItBtn != null ? _gotItBtn.GetComponent<ClueGotItGripConfirm>() : null;
+        if (grip != null) grip.enabled = false;
+
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null)
+        {
+            if (_cluePanel != null) _cluePanel.SetActive(false);
+            if (grip != null) grip.enabled = true;
+            _fading = false;
+            yield break;
+        }
+
+        cg.interactable = false;
+        cg.blocksRaycasts = false;
+        float dur = Mathf.Max(0.12f, panelFadeOutSeconds);
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = 1f - u;
+            yield return null;
+        }
+
+        cg.alpha = 0f;
         _cluePanel.SetActive(false);
-        OnClueSolved?.Invoke(clueIndex);
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
+        if (grip != null) grip.enabled = true;
+        _fading = false;
+        if (fireSolvedEvent)
+            PuzzleManager.TryHandleClueSolved(clueIndex, this);
+    }
+
+    void ResetPanelCanvasGroup()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null) return;
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
+    }
+
+    IEnumerator FadeInPanelCoroutine()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null) yield break;
+
+        float dur = Mathf.Max(0.05f, panelFadeInSeconds);
+        float t = 0f;
+        cg.alpha = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = u;
+            yield return null;
+        }
+        cg.alpha = 1f;
     }
 
     // ── Build: floating SPIN prompt ───────────────────────────────────────────
@@ -234,7 +386,7 @@ public class GlobeClueReveal : MonoBehaviour
         tmp.fontStyle          = FontStyles.Bold;
         tmp.color              = PromptCol;
         tmp.alignment          = TextAlignmentOptions.Center;
-        tmp.enableWordWrapping = false;
+        tmp.textWrappingMode = TextWrappingModes.NoWrap;
         var trt      = txtObj.GetComponent<RectTransform>();
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
@@ -261,12 +413,13 @@ public class GlobeClueReveal : MonoBehaviour
         if (xrRay != null) canvasObj.AddComponent(xrRay);
 
         var canvasRT = canvasObj.GetComponent<RectTransform>();
-        canvasRT.sizeDelta  = new Vector2(0.60f, 0.80f);
+        canvasRT.sizeDelta  = new Vector2(ClueUiLayout.PanelWidthMeters, ClueUiLayout.PanelHeightMeters);
         canvasRT.localScale = Vector3.one;
         _clueCanvas = canvas;
 
         // ── Paper panel ────────────────────────────────────────────────────
-        const float PW = 0.54f, PH = 0.74f;
+        float PW = ClueUiLayout.PanelWidthMeters - 0.04f;
+        float PH = ClueUiLayout.PanelHeightMeters - 0.04f;
         var panel = MakeRect("CluePanel", canvasObj.transform,
             new Vector2(PW, PH), Vector2.zero, BgPaper);
         _cluePanel = panel;
@@ -280,13 +433,23 @@ public class GlobeClueReveal : MonoBehaviour
             "CLUE", headerH * 0.52f, FontStyles.Bold, InkFaded,
             TextAlignmentOptions.Center, new Vector2(PW * 0.85f, headerH), Vector2.zero);
 
-        // GOT IT button
-        float btnH = PH * 0.13f;
-        float btnY = -(PH * 0.5f) + btnH * 0.5f + PH * 0.04f;
+        float btnH = Mathf.Max(PH * 0.18f, 0.10f);
+        float btnW = Mathf.Max(PW * 0.78f, 0.26f);
+        float btnY = -(PH * 0.5f) + btnH * 0.5f + PH * 0.03f;
         _gotItBtn = MakeButton("GotItBtn", "GOT IT",
-            panel.transform, new Vector2(0f, btnY), 0.28f, btnH);
+            panel.transform, new Vector2(0f, btnY), btnW, btnH);
         _gotItBtn.onClick.AddListener(Dismiss);
         _gotItBtn.interactable = false;
+        ClueUiLayout.WireGotItButtonForXrDirectSelect(_gotItBtn);
+        var gotItGrip = _gotItBtn.GetComponent<ClueGotItGripConfirm>();
+        if (gotItGrip != null)
+            gotItGrip.SetGripThresholds(0.84f, 0.2f, 0.38f);
+        var gotItBox = _gotItBtn.GetComponent<BoxCollider>();
+        if (gotItBox != null)
+        {
+            var s = gotItBox.size;
+            gotItBox.size = new Vector3(s.x * 1.12f, s.y * 1.18f, Mathf.Max(0.042f, s.z * 1.4f));
+        }
 
         // Body text — auto-sized to fit between header and button
         float bodyGap    = PH * 0.03f;
@@ -295,14 +458,14 @@ public class GlobeClueReveal : MonoBehaviour
         float bodyH      = (headerBotY - bodyGap) - (btnTopY + bodyGap);
         float bodyY      = (headerBotY - bodyGap + btnTopY + bodyGap) * 0.5f;
         var bodyTmp = MakeLabel("BodyTxt", panel.transform,
-            m_ClueText, PH * 0.065f, FontStyles.Italic, Ink,
+            m_ClueText, PH * 0.042f, FontStyles.Italic, Ink,
             TextAlignmentOptions.Center,
             new Vector2(PW - 0.08f * 2f, Mathf.Max(bodyH, 0.01f)),
             new Vector2(0f, bodyY));
-        bodyTmp.enableAutoSizing = true;
-        bodyTmp.fontSizeMin      = PH * 0.035f;
-        bodyTmp.fontSizeMax      = PH * 0.065f;
+        bodyTmp.enableAutoSizing = false;
+        bodyTmp.textWrappingMode = TextWrappingModes.Normal;
 
+        panel.AddComponent<CanvasGroup>();
         _cluePanel.SetActive(false);
     }
 
@@ -334,7 +497,7 @@ public class GlobeClueReveal : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.color              = color;
         tmp.alignment          = align;
-        tmp.enableWordWrapping = true;
+        tmp.textWrappingMode = TextWrappingModes.Normal;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;
@@ -371,18 +534,24 @@ public class GlobeClueReveal : MonoBehaviour
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
 
-        var box       = obj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.05f);
-
         return btn;
     }
 
     static void EnsureEventSystem()
     {
-        if (EventSystem.current != null) return;
-        var es = new GameObject("EventSystem");
-        es.AddComponent<EventSystem>();
-        es.AddComponent<StandaloneInputModule>();
+        var xrModule = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
+
+        if (EventSystem.current == null)
+        {
+            var es = new GameObject("EventSystem");
+            es.AddComponent<EventSystem>();
+            if (xrModule != null) es.AddComponent(xrModule);
+            else es.AddComponent<StandaloneInputModule>();
+        }
+        else if (xrModule != null && EventSystem.current.GetComponent(xrModule) == null)
+        {
+            EventSystem.current.gameObject.AddComponent(xrModule);
+        }
     }
 }

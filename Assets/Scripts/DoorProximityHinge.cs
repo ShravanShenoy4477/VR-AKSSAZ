@@ -1,7 +1,6 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
-using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
 /// Door that opens/closes by proximity:
@@ -19,7 +18,7 @@ public class DoorProximityHinge : MonoBehaviour
     [SerializeField] GameObject m_KeyObject;
 
     [Tooltip("If true and Key Object is empty, the first XRGrabInteractable collider that enters will be wired as the key object.")]
-    [SerializeField] bool m_AutoWireKeyObject = true;
+    [SerializeField] bool m_AutoWireKeyObject = false;
 
     [Header("Animation")]
     [SerializeField] Vector3 m_LocalSwingAxis = Vector3.up;
@@ -49,6 +48,7 @@ public class DoorProximityHinge : MonoBehaviour
     bool m_KeyAttachedToHinge;
     Coroutine m_Routine;
     Quaternion m_ClosedLocalRotation;
+    public Transform HingePivotTransform => m_HingePivot != null ? m_HingePivot : transform;
 
     void Awake()
     {
@@ -65,6 +65,15 @@ public class DoorProximityHinge : MonoBehaviour
             col.isTrigger = true; // Ensure this object is acting as the proximity trigger.
 
         Debug.Log($"[DoorProximityHinge] Awake on {gameObject.name}, hinge='{m_HingePivot.name}', key='{(m_KeyObject != null ? m_KeyObject.name : "<unassigned>")}', openAngle={m_OpenAngleDegrees}");
+    }
+
+    /// <summary>Assign the exact key object instance that can open this door.</summary>
+    public void SetKeyObject(GameObject keyObject)
+    {
+        m_KeyObject = keyObject;
+        m_AutoWireKeyObject = false;
+        if (m_KeyObject != null)
+            Debug.Log($"[DoorProximityHinge] Key object set to '{m_KeyObject.name}' on '{gameObject.name}'.");
     }
 
     void OnTriggerEnter(Collider other)
@@ -150,16 +159,15 @@ public class DoorProximityHinge : MonoBehaviour
 
         if (m_KeyObject == null)
         {
+            if (!m_AutoWireKeyObject)
+                return false;
+
             var grab = other.GetComponentInParent<XRGrabInteractable>();
             if (grab == null)
                 return false;
 
-            if (m_AutoWireKeyObject)
-            {
-                m_KeyObject = grab.gameObject;
-                Debug.Log($"[DoorProximityHinge] Auto-wired key object '{m_KeyObject.name}' to door '{gameObject.name}'.");
-            }
-
+            m_KeyObject = grab.gameObject;
+            Debug.Log($"[DoorProximityHinge] Auto-wired key object '{m_KeyObject.name}' to door '{gameObject.name}'.");
             return true;
         }
 

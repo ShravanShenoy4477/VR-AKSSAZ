@@ -4,51 +4,50 @@ using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using UnityEngine.XR;
 
+/// <summary>
+/// World-space HUD: timer, score, Hint 1 / Hint 2. Starts hidden; <b>left Y</b> toggles (H in Editor).
+/// When shown, it anchors once in front of the headset and then stays fixed in world space.
+/// </summary>
 public class FloatingAutoTimer : MonoBehaviour
 {
-    // ── Colours ──────────────────────────────────────────────────────────────
-    static readonly Color BgDark      = new Color(0.07f, 0.08f, 0.13f, 0.97f);
-    static readonly Color HeaderColor  = new Color(0.11f, 0.08f, 0.28f, 1.00f);
-    static readonly Color HintAreaBg   = new Color(0.04f, 0.08f, 0.18f, 1.00f);
-    static readonly Color AccentPurple = new Color(0.50f, 0.25f, 0.90f, 1.00f);
-    static readonly Color AccentTeal   = new Color(0.10f, 0.62f, 0.68f, 1.00f);
-    static readonly Color AccentRed    = new Color(0.72f, 0.18f, 0.18f, 1.00f);
-    static readonly Color TextPrimary  = new Color(0.94f, 0.94f, 1.00f, 1.00f);
-    static readonly Color TextDim      = new Color(0.50f, 0.70f, 1.00f, 0.65f);
-    static readonly Color GoldTimer    = new Color(1.00f, 0.84f, 0.18f, 1.00f);
+    static readonly Color BgDark       = MenuThemes.Hud.Background;
+    static readonly Color AccentPurple = MenuThemes.Hud.AccentPrimary;
+    static readonly Color AccentTeal   = MenuThemes.Hud.AccentSecondary;
+    static readonly Color GoldTimer    = MenuThemes.Hud.TimerGold;
 
-    // ── State ────────────────────────────────────────────────────────────────
     private static FloatingAutoTimer _instance;
 
     private Canvas            canvas;
     private GameObject        menuPanel;
     private TextMeshProUGUI   timeText;
     private TextMeshProUGUI   hintDisplayText;
+    private TextMeshProUGUI   scoreLineText;
     private Button            hint1Button;
     private Button            hint2Button;
     private bool              timerIsRunning  = true;
     private float             timeRemaining   = 600f;
-    private bool              isMenuOpen      = false;
     private bool              _timerExpired   = false;
     private int               _hintsUsed      = 0;
     private float             _initialTimeSeconds;
-    private InputAction       toggleAction;
 
-    private const float HudForwardDistance = 0.75f;
-    private const float HudLeftOffset      = 0.42f;
-    private const float HudVerticalOffset  = -0.02f;
+    bool _hudPanelVisible;
+    bool _prevLeftSecondary;
 
-    /// <summary>Fired once when the 10-second timer reaches zero.</summary>
+    [Header("HUD placement (camera-relative)")]
+    [SerializeField] float hudForwardMeters = 0.48f;
+    [SerializeField] float hudRightMeters = 0.12f;
+    [SerializeField] float hudUpMeters = -0.04f;
+    [Tooltip("Log when HUD is shown (paste Console if it clips).")]
+    [SerializeField] bool debugHudPlacement;
+
     public static event System.Action OnTimerExpired;
 
-    /// <summary>Seconds remaining on the timer (read by GameCompletionUI for score).</summary>
     public static float TimeRemaining => _instance != null ? _instance.timeRemaining : 0f;
 
-    /// <summary>How many hint buttons the player has pressed.</summary>
     public static int HintsUsed => _instance != null ? _instance._hintsUsed : 0;
 
-    // ── Bootstrap ────────────────────────────────────────────────────────────
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoStart()
     {
@@ -58,35 +57,29 @@ public class FloatingAutoTimer : MonoBehaviour
         obj.AddComponent<FloatingAutoTimer>();
     }
 
-    private void Awake()
+    void Awake()
     {
         _instance = this;
         _initialTimeSeconds = timeRemaining;
+        _hudPanelVisible    = false;
         EnsureEventSystem();
         BuildUI();
-        ForceHudVisible();
+        ApplyHudPanelVisibility();
 
-        // Stop the timer when the door is opened (game won)
         DoorProximityHinge.OnDoorOpened += OnGameWon;
-
-        // Listen for scene reloads to reset timer state
         SceneManager.sceneLoaded += OnSceneLoaded;
     }
 
-    private void OnDestroy()
+    void OnDestroy()
     {
         if (_instance == this) _instance = null;
-        toggleAction?.Disable();
-        toggleAction?.Dispose();
         DoorProximityHinge.OnDoorOpened -= OnGameWon;
         SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
-    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        // Reset timer state when a scene loads (or reloads on Play Again)
         ResetForRestart();
-        Debug.Log("[FloatingAutoTimer] Scene reloaded — timer reset and restarted.");
     }
 
     public void ResetForRestart()
@@ -94,15 +87,16 @@ public class FloatingAutoTimer : MonoBehaviour
         timeRemaining  = _initialTimeSeconds;
         timerIsRunning = true;
         _timerExpired  = false;
-        isMenuOpen     = false;
         _hintsUsed     = 0;
 
-        ForceHudVisible();
+        _hudPanelVisible = false;
+        ApplyHudPanelVisibility();
 
         if (hintDisplayText != null)
         {
-            hintDisplayText.text  = "Press a hint button to reveal a clue.";
-            hintDisplayText.color = new Color(0.70f, 0.88f, 1.00f, 1f);
+            hintDisplayText.text =
+                "Hints: <b>grip</b> inside Hint 1 / Hint 2, or use the laser + trigger. Press <b>left Y</b> to show or hide this HUD (H in Editor).";
+            hintDisplayText.color = MenuThemes.Hud.TextSecondary;
         }
 
         if (hint1Button != null)
@@ -115,62 +109,87 @@ public class FloatingAutoTimer : MonoBehaviour
         }
     }
 
-    private void OnGameWon()
+    void OnGameWon()
     {
         timerIsRunning = false;
     }
 
-    private void LateUpdate()
+    void LateUpdate()
     {
-        if (menuPanel != null && menuPanel.activeSelf)
+        if (!_hudPanelVisible || menuPanel == null || !menuPanel.activeSelf)
+            return;
+        RefreshScoreLine();
+    }
+
+    public void ForceHudVisible()
+    {
+        _hudPanelVisible = true;
+        ApplyHudPanelVisibility();
+    }
+
+    void ApplyHudPanelVisibility()
+    {
+        if (menuPanel != null)
+            menuPanel.SetActive(_hudPanelVisible);
+        if (_hudPanelVisible)
             PositionHud();
     }
 
-    // ── Input ────────────────────────────────────────────────────────────────
-    private void SetupInput()
+    void TryToggleHudVisibility()
     {
-        toggleAction = new InputAction("ToggleMenu",
-            binding: "<XRController>{LeftHand}/primaryButton");
-        toggleAction.AddBinding("<Keyboard>/x");
-        toggleAction.performed += _ => ToggleMenu();
-        toggleAction.Enable();
-    }
+        bool pressedEdge = false;
 
-    private void ToggleMenu()
-    {
-        isMenuOpen = !isMenuOpen;
-        menuPanel.SetActive(isMenuOpen);
-
-        if (isMenuOpen && Camera.main != null)
+        var left = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+        if (left.isValid &&
+            left.TryGetFeatureValue(UnityEngine.XR.CommonUsages.secondaryButton, out bool y))
         {
-            Transform cam = Camera.main.transform;
-            canvas.transform.position =
-                cam.position + cam.forward * 0.85f + Vector3.down * 0.10f;
-            canvas.transform.rotation =
-                Quaternion.Euler(0f, cam.rotation.eulerAngles.y, 0f);
+            if (y && !_prevLeftSecondary)
+                pressedEdge = true;
+            _prevLeftSecondary = y;
         }
+        else
+            _prevLeftSecondary = false;
+
+        if (Keyboard.current != null && Keyboard.current.hKey.wasPressedThisFrame)
+            pressedEdge = true;
+
+        if (!pressedEdge) return;
+
+        _hudPanelVisible = !_hudPanelVisible;
+        ApplyHudPanelVisibility();
+        if (debugHudPlacement && _hudPanelVisible && Camera.main != null && canvas != null)
+        {
+            var c = Camera.main.transform;
+            Debug.Log(
+                $"[FloatingAutoTimer] HUD visible: canvasPos={canvas.transform.position} camPos={c.position} " +
+                $"fwd={hudForwardMeters} right={hudRightMeters} up={hudUpMeters}");
+        }
+
+        XrHaptics.PulseLeft(0.35f, 0.04f);
     }
 
-    private void ForceHudVisible()
-    {
-        isMenuOpen = true;
-        if (menuPanel != null)
-            menuPanel.SetActive(true);
-        PositionHud();
-    }
-
-    private void PositionHud()
+    void PositionHud()
     {
         if (Camera.main == null || canvas == null) return;
         Transform cam = Camera.main.transform;
         canvas.transform.position =
-            cam.position + cam.forward * HudForwardDistance +
-            cam.right * -HudLeftOffset + Vector3.up * HudVerticalOffset;
-        canvas.transform.rotation = Quaternion.Euler(0f, cam.rotation.eulerAngles.y, 0f);
+            cam.position
+            + cam.forward * hudForwardMeters
+            + cam.right * hudRightMeters
+            + cam.up * hudUpMeters;
+        canvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
     }
 
-    // ── EventSystem ──────────────────────────────────────────────────────────
-    private void EnsureEventSystem()
+    void RefreshScoreLine()
+    {
+        if (scoreLineText == null) return;
+        int   clues = PuzzleManager.SolvedClueCount;
+        float mins  = Mathf.Max(0f, timeRemaining / 60f);
+        float score = Mathf.Max(0f, clues + mins - 0.25f * _hintsUsed);
+        scoreLineText.text = $"Clues {Mathf.Min(clues, 99)}/3   Score≈{score:0.0}   Hints used:{_hintsUsed}";
+    }
+
+    void EnsureEventSystem()
     {
         var xrModule = System.Type.GetType(
             "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
@@ -190,10 +209,8 @@ public class FloatingAutoTimer : MonoBehaviour
         }
     }
 
-    // ── UI Construction ──────────────────────────────────────────────────────
-    private void BuildUI()
+    void BuildUI()
     {
-        // Canvas (WorldSpace, 1 unit = 1 metre) ─────────────────────────────
         var canvasObj = new GameObject("HUDCanvas");
         canvasObj.transform.SetParent(transform);
         canvas = canvasObj.AddComponent<Canvas>();
@@ -206,33 +223,93 @@ public class FloatingAutoTimer : MonoBehaviour
         if (xrRay != null) canvasObj.AddComponent(xrRay);
 
         var canvasRT = canvasObj.GetComponent<RectTransform>();
-        canvasRT.sizeDelta  = new Vector2(1.6f, 1.0f);
+        canvasRT.sizeDelta  = new Vector2(0.55f, 0.40f);
         canvasRT.localScale = Vector3.one;
 
-        // Compact timer-only panel ─────────────────────────────────────────
         menuPanel = MakePanel("MenuPanel", canvasObj.transform,
-            new Vector2(0.26f, 0.12f), Vector2.zero, BgDark);
-        MakeBorderGlow(menuPanel.transform, new Vector2(0.26f, 0.12f), AccentPurple);
-        menuPanel.SetActive(false);
+            new Vector2(0.50f, 0.34f), Vector2.zero, BgDark);
+        MakeBorderGlow(menuPanel.transform, new Vector2(0.50f, 0.34f), AccentPurple);
 
         var clockObj = new GameObject("Clock");
         clockObj.transform.SetParent(menuPanel.transform, false);
         timeText = clockObj.AddComponent<TextMeshProUGUI>();
         timeText.text      = "10:00";
-        timeText.fontSize  = 0.10f;
+        timeText.fontSize  = 0.072f;
         timeText.fontStyle = FontStyles.Bold;
         timeText.alignment = TextAlignmentOptions.Center;
         timeText.color     = GoldTimer;
         var crt = clockObj.GetComponent<RectTransform>();
-        crt.anchorMin = Vector2.zero;
-        crt.anchorMax = Vector2.one;
+        crt.anchorMin = new Vector2(0.05f, 0.72f);
+        crt.anchorMax = new Vector2(0.95f, 0.98f);
         crt.offsetMin = Vector2.zero;
         crt.offsetMax = Vector2.zero;
+
+        var scoreObj = new GameObject("ScoreLine");
+        scoreObj.transform.SetParent(menuPanel.transform, false);
+        scoreLineText = scoreObj.AddComponent<TextMeshProUGUI>();
+        scoreLineText.fontSize  = 0.028f;
+        scoreLineText.alignment = TextAlignmentOptions.Center;
+        scoreLineText.color     = new Color(MenuThemes.Hud.TextSecondary.r, MenuThemes.Hud.TextSecondary.g, MenuThemes.Hud.TextSecondary.b, 0.9f);
+        var srt = scoreObj.GetComponent<RectTransform>();
+        srt.anchorMin = new Vector2(0.05f, 0.58f);
+        srt.anchorMax = new Vector2(0.95f, 0.70f);
+        srt.offsetMin = Vector2.zero;
+        srt.offsetMax = Vector2.zero;
+
+        hint1Button = MakeRayButton("Hint1", "HINT 1", menuPanel.transform,
+            new Vector2(-0.14f, 0.40f), 0.16f, 0.07f, AccentTeal);
+        hint1Button.onClick.AddListener(OnHint1);
+        WorldSpaceGripButton.Attach(hint1Button, OnHint1);
+
+        hint2Button = MakeRayButton("Hint2", "HINT 2", menuPanel.transform,
+            new Vector2(0.14f, 0.40f), 0.16f, 0.07f, AccentPurple);
+        hint2Button.onClick.AddListener(OnHint2);
+        WorldSpaceGripButton.Attach(hint2Button, OnHint2);
+        ApplyLockedStyle(hint2Button);
+
+        var hintBody = new GameObject("HintBody");
+        hintBody.transform.SetParent(menuPanel.transform, false);
+        hintDisplayText = hintBody.AddComponent<TextMeshProUGUI>();
+        hintDisplayText.text =
+            "Hints: move a controller into a hint row and <b>squeeze grip</b> briefly, or use the laser + trigger.\nPress <b>left Y</b> to show or hide this HUD (H in Editor). When shown, this HUD stays where you opened it.";
+        hintDisplayText.fontSize  = 0.026f;
+        hintDisplayText.alignment = TextAlignmentOptions.Center;
+        hintDisplayText.color     = MenuThemes.Hud.TextSecondary;
+        hintDisplayText.textWrappingMode = TextWrappingModes.Normal;
+        hintDisplayText.richText  = true;
+        var hrt = hintBody.GetComponent<RectTransform>();
+        hrt.anchorMin = new Vector2(0.05f, 0.08f);
+        hrt.anchorMax = new Vector2(0.95f, 0.52f);
+        hrt.offsetMin = Vector2.zero;
+        hrt.offsetMax = Vector2.zero;
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    void OnHint1()
+    {
+        if (!hint1Button.interactable) return;
+        _hintsUsed++;
+        hintDisplayText.text =
+            "Start near the seating: pick up the book you can grab. After clue 1, touch anywhere on the big sofa with a hand and press grip once to slide it sideways and reach the next book.";
+        hintDisplayText.color = Color.white;
+        hint1Button.interactable = false;
+        hint2Button.interactable = true;
+        SetButtonColors(hint2Button, AccentPurple);
+        var l = hint2Button.GetComponentInChildren<TextMeshProUGUI>();
+        if (l != null) l.color = Color.white;
+        XrHaptics.PulseRight(0.45f, 0.06f);
+    }
 
-    private static GameObject MakePanel(string name, Transform parent,
+    void OnHint2()
+    {
+        if (!hint2Button.interactable) return;
+        _hintsUsed++;
+        hintDisplayText.text =
+            "Later: search around the larger couches, then the corner globe. Keys unlock the door when you bring them to the knob area.";
+        hint2Button.interactable = false;
+        XrHaptics.PulseRight(0.45f, 0.06f);
+    }
+
+    static GameObject MakePanel(string name, Transform parent,
         Vector2 size, Vector2 pos, Color color)
     {
         var obj = new GameObject(name);
@@ -244,7 +321,7 @@ public class FloatingAutoTimer : MonoBehaviour
         return obj;
     }
 
-    private static void MakeBorderGlow(Transform parent, Vector2 innerSize, Color color)
+    static void MakeBorderGlow(Transform parent, Vector2 innerSize, Color color)
     {
         const float b = 0.012f;
         var obj = new GameObject("BorderGlow");
@@ -256,69 +333,37 @@ public class FloatingAutoTimer : MonoBehaviour
         rt.anchoredPosition = Vector2.zero;
     }
 
-    private static void MakeLabel(string name, Transform parent,
-        string text, float size, FontStyles style, Color color,
-        TextAlignmentOptions align,
-        Vector2 anchorMin, Vector2 anchorMax,
-        Vector2 offsetMin, Vector2 offsetMax)
-    {
-        var obj = new GameObject(name);
-        obj.transform.SetParent(parent, false);
-        var tmp       = obj.AddComponent<TextMeshProUGUI>();
-        tmp.text      = text;
-        tmp.fontSize  = size;
-        tmp.fontStyle = style;
-        tmp.alignment = align;
-        tmp.color     = color;
-        var rt        = obj.GetComponent<RectTransform>();
-        rt.anchorMin  = anchorMin;
-        rt.anchorMax  = anchorMax;
-        rt.offsetMin  = offsetMin;
-        rt.offsetMax  = offsetMax;
-    }
-
-    /// <summary>
-    /// Creates a button with a BoxCollider trigger so VRHandPoker's
-    /// OverlapSphere can detect it. No Rigidbody needed.
-    /// </summary>
-    private static Button MakeButton(string name, string label,
-        Transform parent, Vector2 pos, float w, float h, Color color)
+    static Button MakeRayButton(string name, string label, Transform parent,
+        Vector2 pos, float w, float h, Color color)
     {
         var btnObj = new GameObject(name);
         btnObj.transform.SetParent(parent, false);
-        var img   = btnObj.AddComponent<Image>();
+        var img = btnObj.AddComponent<Image>();
         img.color = color;
-        var btn   = btnObj.AddComponent<Button>();
+        var btn = btnObj.AddComponent<Button>();
         SetButtonColors(btn, color);
 
         var rt = btnObj.GetComponent<RectTransform>();
         rt.sizeDelta        = new Vector2(w, h);
         rt.anchoredPosition = pos;
 
-        // Text label
         var textObj = new GameObject("Label");
         textObj.transform.SetParent(btnObj.transform, false);
         var tmp       = textObj.AddComponent<TextMeshProUGUI>();
         tmp.text      = label;
         tmp.alignment = TextAlignmentOptions.Center;
         tmp.fontStyle = FontStyles.Bold;
-        tmp.fontSize  = h * 0.42f;
+        tmp.fontSize  = h * 0.38f;
         tmp.color     = Color.white;
         var trt       = textObj.GetComponent<RectTransform>();
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
 
-        // BoxCollider trigger — detected by VRHandPoker.OverlapSphere
-        // Depth (Z) is generous so a moving controller can't pass through
-        var box       = btnObj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.08f);
-
         return btn;
     }
 
-    private static void SetButtonColors(Button btn, Color normal)
+    static void SetButtonColors(Button btn, Color normal)
     {
         var cb              = btn.colors;
         cb.normalColor      = normal;
@@ -330,16 +375,17 @@ public class FloatingAutoTimer : MonoBehaviour
         btn.colors = cb;
     }
 
-    private static void ApplyLockedStyle(Button btn)
+    static void ApplyLockedStyle(Button btn)
     {
         SetButtonColors(btn, new Color(0.22f, 0.22f, 0.28f, 1f));
         var label = btn.GetComponentInChildren<TextMeshProUGUI>();
         if (label != null) label.color = new Color(1f, 1f, 1f, 0.35f);
     }
 
-    // ── Update ───────────────────────────────────────────────────────────────
-    private void Update()
+    void Update()
     {
+        TryToggleHudVisibility();
+
         if (timerIsRunning)
         {
             timeRemaining = Mathf.Max(0f, timeRemaining - Time.deltaTime);
@@ -354,20 +400,25 @@ public class FloatingAutoTimer : MonoBehaviour
             }
         }
 
-        int m = Mathf.FloorToInt(timeRemaining / 60);
-        int s = Mathf.FloorToInt(timeRemaining % 60);
-        timeText.text = $"{m:00}:{s:00}";
+        if (timeText != null && _hudPanelVisible && menuPanel != null && menuPanel.activeSelf)
+        {
+            int m = Mathf.FloorToInt(timeRemaining / 60);
+            int s = Mathf.FloorToInt(timeRemaining % 60);
+            timeText.text = $"{m:00}:{s:00}";
 
-        timeText.color = timeRemaining <= 60f
-            ? Color.Lerp(GoldTimer, new Color(1f, 0.25f, 0.25f), (60f - timeRemaining) / 60f)
-            : GoldTimer;
+            timeText.color = timeRemaining <= 60f
+                ? Color.Lerp(GoldTimer, new Color(1f, 0.25f, 0.25f), (60f - timeRemaining) / 60f)
+                : GoldTimer;
+        }
     }
 
-    private void OnTimesUp()
+    void OnTimesUp()
     {
-        // Lock the display at 00:00 in red; TimeUpUI handles the full-screen panel
-        timeText.text  = "00:00";
-        timeText.color = new Color(1f, 0.25f, 0.25f, 1f);
+        if (timeText != null)
+        {
+            timeText.text  = "00:00";
+            timeText.color = new Color(1f, 0.25f, 0.25f, 1f);
+        }
 
         OnTimerExpired?.Invoke();
     }

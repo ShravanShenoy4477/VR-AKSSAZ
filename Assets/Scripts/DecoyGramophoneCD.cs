@@ -32,6 +32,8 @@ public class DecoyGramophoneCD : MonoBehaviour
 
     [Tooltip("Right hand controller. Auto-finds 'RightHandController' if blank.")]
     [SerializeField] Transform m_RightController;
+    [Tooltip("Left hand controller. Auto-finds 'LeftHandController' if blank.")]
+    [SerializeField] Transform m_LeftController;
 
     [Tooltip("The disc mesh to spin. Leave blank to spin the whole object.")]
     [SerializeField] Transform m_CDDisc;
@@ -46,15 +48,15 @@ public class DecoyGramophoneCD : MonoBehaviour
     [SerializeField] AnimationCurve m_SpinEase = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
 
     // ── Colours — warm cream, matches real clues so player trusts it ──────────
-    static readonly Color BgPaper   = new Color(0.95f, 0.91f, 0.80f, 0.98f);
-    static readonly Color HeaderCol = new Color(0.20f, 0.14f, 0.08f, 1.00f);
-    static readonly Color InkFaded  = new Color(0.45f, 0.32f, 0.14f, 0.80f);
-    static readonly Color Ink       = new Color(0.12f, 0.10f, 0.08f, 1.00f);
-    static readonly Color CDCol     = new Color(0.55f, 0.55f, 0.60f, 0.90f);  // silver disc
-    static readonly Color CDHole    = new Color(0.80f, 0.75f, 0.65f, 1.00f);  // centre hole
-    static readonly Color BtnCol    = new Color(0.25f, 0.18f, 0.10f, 1.00f);
-    static readonly Color BtnText   = new Color(0.92f, 0.87f, 0.75f, 1.00f);
-    static readonly Color PromptCol = new Color(1.00f, 0.92f, 0.40f, 1.00f);
+    static readonly Color BgPaper   = MenuThemes.Clue.Background;
+    static readonly Color HeaderCol = MenuThemes.Clue.Header;
+    static readonly Color InkFaded  = MenuThemes.Clue.InkMuted;
+    static readonly Color Ink       = MenuThemes.Clue.Ink;
+    static readonly Color CDCol     = MenuThemes.Clue.CdOuter;  // silver disc
+    static readonly Color CDHole    = MenuThemes.Clue.CdHole;   // centre hole
+    static readonly Color BtnCol    = MenuThemes.Clue.Button;
+    static readonly Color BtnText   = MenuThemes.Clue.ButtonText;
+    static readonly Color PromptCol = MenuThemes.Clue.Prompt;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Canvas     _clueCanvas;
@@ -64,6 +66,14 @@ public class DecoyGramophoneCD : MonoBehaviour
     private bool       _triggered  = false;
     private bool       _prevGrip   = false;
     private Coroutine  _spinRoutine;
+    private bool       _fading;
+    private float      _nearCloseAccum;
+
+    [Header("Dismiss")]
+    [SerializeField] float panelFadeInSeconds = 0.25f;
+    [SerializeField] float panelFadeOutSeconds = 0.55f;
+    [SerializeField] float nearCloseDismissHoldSeconds = 0.72f;
+    [SerializeField] float nearCloseBoundsExpand = 0.12f;
 
     // ── Awake ─────────────────────────────────────────────────────────────────
     void Awake()
@@ -92,6 +102,13 @@ public class DecoyGramophoneCD : MonoBehaviour
             else
                 Debug.LogWarning("DecoyGramophoneCD: assign Right Controller in the Inspector.");
         }
+
+        if (m_LeftController == null)
+        {
+            var go = GameObject.Find("LeftHandController");
+            if (go != null)
+                m_LeftController = go.transform;
+        }
     }
 
     void Start()
@@ -104,16 +121,10 @@ public class DecoyGramophoneCD : MonoBehaviour
     // ── Update ────────────────────────────────────────────────────────────────
     void Update()
     {
-        // Show / hide SPIN prompt based on proximity
-        if (_promptRoot != null && !_triggered)
-        {
-            bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
-            bool inRange   = m_Zone != null && m_RightController != null &&
-                             IsInsideZone(m_Zone, m_RightController.position);
-            _promptRoot.gameObject.SetActive(inRange && !panelOpen);
-        }
+        if (_cluePanel != null && _cluePanel.activeSelf)
+            UpdateNearCloseDismiss();
 
-        if (_triggered || m_Zone == null || m_RightController == null) return;
+        if (m_Zone == null || m_RightController == null) return;
 
         var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
         if (!device.isValid) return;
@@ -121,12 +132,52 @@ public class DecoyGramophoneCD : MonoBehaviour
 
         bool pressedEdge = grip && !_prevGrip;
         _prevGrip = grip;
+        bool inZone = IsInsideZone(m_Zone, m_RightController.position);
 
-        if (!pressedEdge) return;
-        if (!IsInsideZone(m_Zone, m_RightController.position)) return;
+        // Show / hide SPIN prompt based on proximity
+        if (_promptRoot != null && !_triggered)
+        {
+            bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
+            _promptRoot.gameObject.SetActive(inZone && !panelOpen);
+        }
+
+        if (!pressedEdge || !inZone) return;
+        if (_triggered)
+        {
+            if (_cluePanel == null || !_cluePanel.activeSelf)
+                ShowClue();
+            return;
+        }
 
         if (_spinRoutine != null) StopCoroutine(_spinRoutine);
         _spinRoutine = StartCoroutine(SpinAndReveal());
+    }
+
+    void UpdateNearCloseDismiss()
+    {
+        if (_fading || _gotItBtn == null || !_gotItBtn.interactable)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var box = _gotItBtn.GetComponent<BoxCollider>();
+        if (box == null)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var b = box.bounds;
+        b.Expand(nearCloseBoundsExpand);
+        bool near = false;
+        if (m_RightController != null) near |= b.Contains(m_RightController.position);
+        if (m_LeftController != null) near |= b.Contains(m_LeftController.position);
+        if (near) _nearCloseAccum += Time.deltaTime;
+        else _nearCloseAccum = 0f;
+
+        if (_nearCloseAccum >= nearCloseDismissHoldSeconds)
+            Dismiss();
     }
 
     void LateUpdate()
@@ -145,7 +196,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         // Clue panel follows headset
         if (_cluePanel != null && _cluePanel.activeSelf)
         {
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
     }
@@ -182,11 +233,13 @@ public class DecoyGramophoneCD : MonoBehaviour
     void ShowClue()
     {
         _cluePanel.SetActive(true);
+        ResetPanelCanvasGroup();
+        StartCoroutine(FadeInPanelCoroutine());
 
         if (Camera.main != null)
         {
             Transform cam = Camera.main.transform;
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
 
@@ -202,8 +255,75 @@ public class DecoyGramophoneCD : MonoBehaviour
 
     void Dismiss()
     {
-        _cluePanel.SetActive(false);
+        if (_fading) return;
+        StartCoroutine(FadeOutPanelCoroutine());
         // Decoys do NOT fire OnClueSolved — progress is never incremented
+    }
+
+    IEnumerator FadeOutPanelCoroutine()
+    {
+        _fading = true;
+        _nearCloseAccum = 0f;
+        var grip = _gotItBtn != null ? _gotItBtn.GetComponent<ClueGotItGripConfirm>() : null;
+        if (grip != null) grip.enabled = false;
+
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null)
+        {
+            if (_cluePanel != null) _cluePanel.SetActive(false);
+            if (grip != null) grip.enabled = true;
+            _fading = false;
+            yield break;
+        }
+
+        cg.interactable = false;
+        cg.blocksRaycasts = false;
+        float dur = Mathf.Max(0.12f, panelFadeOutSeconds);
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = 1f - u;
+            yield return null;
+        }
+
+        cg.alpha = 0f;
+        _cluePanel.SetActive(false);
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
+        if (grip != null) grip.enabled = true;
+        _fading = false;
+    }
+
+    IEnumerator FadeInPanelCoroutine()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null) yield break;
+
+        float dur = Mathf.Max(0.05f, panelFadeInSeconds);
+        float t = 0f;
+        cg.alpha = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = u;
+            yield return null;
+        }
+        cg.alpha = 1f;
+    }
+
+    void ResetPanelCanvasGroup()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null) return;
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
     }
 
     // ── Build: floating SPIN prompt ───────────────────────────────────────────
@@ -228,7 +348,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         tmp.fontStyle          = FontStyles.Bold;
         tmp.color              = PromptCol;
         tmp.alignment          = TextAlignmentOptions.Center;
-        tmp.enableWordWrapping = false;
+        tmp.textWrappingMode = TextWrappingModes.NoWrap;
         var trt      = txtObj.GetComponent<RectTransform>();
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
@@ -255,12 +375,13 @@ public class DecoyGramophoneCD : MonoBehaviour
         if (xrRay != null) canvasObj.AddComponent(xrRay);
 
         var canvasRT = canvasObj.GetComponent<RectTransform>();
-        canvasRT.sizeDelta  = new Vector2(0.60f, 0.80f);
+        canvasRT.sizeDelta  = new Vector2(ClueUiLayout.PanelWidthMeters, ClueUiLayout.PanelHeightMeters);
         canvasRT.localScale = Vector3.one;
         _clueCanvas = canvas;
 
         // ── Paper panel ────────────────────────────────────────────────────
-        const float PW = 0.54f, PH = 0.74f;
+        float PW = ClueUiLayout.PanelWidthMeters - 0.04f;
+        float PH = ClueUiLayout.PanelHeightMeters - 0.04f;
         var panel = MakeRect("DecoyPanel", canvasObj.transform,
             new Vector2(PW, PH), Vector2.zero, BgPaper);
         _cluePanel = panel;
@@ -281,6 +402,16 @@ public class DecoyGramophoneCD : MonoBehaviour
             panel.transform, new Vector2(0f, btnY), 0.28f, btnH);
         _gotItBtn.onClick.AddListener(Dismiss);
         _gotItBtn.interactable = false;
+        ClueUiLayout.WireGotItButtonForXrDirectSelect(_gotItBtn);
+        var gotItGrip = _gotItBtn.GetComponent<ClueGotItGripConfirm>();
+        if (gotItGrip != null)
+            gotItGrip.SetGripThresholds(0.84f, 0.2f, 0.38f);
+        var gotItBox = _gotItBtn.GetComponent<BoxCollider>();
+        if (gotItBox != null)
+        {
+            var s = gotItBox.size;
+            gotItBox.size = new Vector3(s.x * 1.12f, s.y * 1.18f, Mathf.Max(0.042f, s.z * 1.4f));
+        }
 
         // ── Sketch: CD disc ────────────────────────────────────────────────
         const float SY = 0.06f;
@@ -292,7 +423,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         // Inner groove ring
         MakeRect("CDMid", panel.transform,
             new Vector2(0.068f, 0.068f), new Vector2(cx, SY),
-            new Color(0.30f, 0.30f, 0.35f, 0.85f));
+            MenuThemes.Clue.CdInner);
         // Centre hole
         MakeRect("CDHole", panel.transform,
             new Vector2(0.022f, 0.022f), new Vector2(cx, SY), CDHole);
@@ -321,6 +452,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         bodyTmp.fontSizeMin      = PH * 0.030f;
         bodyTmp.fontSizeMax      = PH * 0.060f;
 
+        panel.AddComponent<CanvasGroup>();
         _cluePanel.SetActive(false);
     }
 
@@ -352,7 +484,7 @@ public class DecoyGramophoneCD : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.color              = color;
         tmp.alignment          = align;
-        tmp.enableWordWrapping = true;
+        tmp.textWrappingMode = TextWrappingModes.Normal;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;
@@ -390,18 +522,24 @@ public class DecoyGramophoneCD : MonoBehaviour
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
 
-        var box       = obj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.05f);
-
         return btn;
     }
 
     static void EnsureEventSystem()
     {
-        if (EventSystem.current != null) return;
-        var es = new GameObject("EventSystem");
-        es.AddComponent<EventSystem>();
-        es.AddComponent<StandaloneInputModule>();
+        var xrModule = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
+
+        if (EventSystem.current == null)
+        {
+            var es = new GameObject("EventSystem");
+            es.AddComponent<EventSystem>();
+            if (xrModule != null) es.AddComponent(xrModule);
+            else es.AddComponent<StandaloneInputModule>();
+        }
+        else if (xrModule != null && EventSystem.current.GetComponent(xrModule) == null)
+        {
+            EventSystem.current.gameObject.AddComponent(xrModule);
+        }
     }
 }

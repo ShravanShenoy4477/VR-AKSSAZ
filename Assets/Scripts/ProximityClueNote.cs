@@ -4,17 +4,21 @@ using UnityEngine.UI;
 using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.XR;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
+using UnityEngine.XR.Interaction.Toolkit;
 
 /// <summary>
 /// Attach to the clue book placed under the couch.
-/// No XRGrabInteractable or Rigidbody needed — the book stays still.
+/// This object is grabbable/liftable via XRGrabInteractable + Rigidbody.
 ///
 /// Behaviour:
 ///   - Player approaches within proximityRadius → "[ GRIP TO READ ]" floats above.
 ///   - Right hand enters zone + grip pressed    → clue card appears in front of headset.
-///   - Player presses "GOT IT"                 → card dismissed, OnClueSolved fires.
+///   - Player presses "GOT IT"                 → card dismissed, PuzzleManager is notified.
 /// </summary>
 [DisallowMultipleComponent]
+[RequireComponent(typeof(XRGrabInteractable))]
+[RequireComponent(typeof(Rigidbody))]
 public class ProximityClueNote : MonoBehaviour
 {
     [Header("Proximity")]
@@ -27,33 +31,50 @@ public class ProximityClueNote : MonoBehaviour
     [Header("References")]
     [Tooltip("Right hand controller. Auto-finds 'RightHandController' if blank.")]
     [SerializeField] Transform m_RightController;
+    [Tooltip("Left hand controller. Auto-finds 'LeftHandController' if blank.")]
+    [SerializeField] Transform m_LeftController;
 
     [Header("Clue")]
     public int clueIndex = 2;
 
-    public static event System.Action<int> OnClueSolved;
-
     // ── Colours ───────────────────────────────────────────────────────────────
-    static readonly Color BgPaper   = new Color(0.96f, 0.93f, 0.84f, 0.98f);
-    static readonly Color HeaderCol = new Color(0.20f, 0.14f, 0.08f, 1.00f);
-    static readonly Color InkFaded  = new Color(0.45f, 0.32f, 0.14f, 0.80f);
-    static readonly Color SketchCol = new Color(0.25f, 0.18f, 0.10f, 0.90f);
-    static readonly Color GlobeCol  = new Color(0.22f, 0.45f, 0.70f, 0.85f);
-    static readonly Color BtnCol    = new Color(0.25f, 0.18f, 0.10f, 1.00f);
-    static readonly Color BtnText   = new Color(0.92f, 0.87f, 0.75f, 1.00f);
-    static readonly Color PromptCol = new Color(1.00f, 0.92f, 0.40f, 1.00f);
+    static readonly Color BgPaper   = MenuThemes.Clue.Background;
+    static readonly Color HeaderCol = MenuThemes.Clue.Header;
+    static readonly Color InkFaded  = MenuThemes.Clue.InkMuted;
+    static readonly Color SketchCol = MenuThemes.Clue.Sketch;
+    static readonly Color GlobeCol  = MenuThemes.Clue.Globe;
+    static readonly Color BtnCol    = MenuThemes.Clue.Button;
+    static readonly Color BtnText   = MenuThemes.Clue.ButtonText;
+    static readonly Color PromptCol = MenuThemes.Clue.Prompt;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Transform  _promptRoot;
     private Canvas     _clueCanvas;
     private GameObject _cluePanel;
     private Button     _gotItBtn;
-    private bool       _solved   = false;
+    private XRGrabInteractable _grab;
+    private Rigidbody _rb;
+    private Collider[] _bookColliders;
+    private bool[]     _bookColliderTriggerDefaults;
+    private bool       _rbKinematicDefault;
+    private bool       _rbDetectCollisionsDefault;
+    private bool       _progressSent;
     private bool       _prevGrip = false;
+    private bool       _fading;
+    private float      _nearCloseAccum;
+    private bool       _gotItDelayElapsed;
+
+    [Header("Dismiss")]
+    [SerializeField] float panelFadeInSeconds = 0.25f;
+    [SerializeField] float panelFadeOutSeconds = 0.55f;
+    [SerializeField] float nearCloseDismissHoldSeconds = 0.72f;
+    [SerializeField] float nearCloseBoundsExpand = 0.12f;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     private void Awake()
     {
+        ConfigureGrabForLift();
+
         if (m_RightController == null)
         {
             var go = GameObject.Find("RightHandController");
@@ -61,6 +82,119 @@ public class ProximityClueNote : MonoBehaviour
                 m_RightController = go.transform;
             else
                 Debug.LogWarning("ProximityClueNote: assign Right Controller in Inspector.");
+        }
+
+        if (m_LeftController == null)
+        {
+            var go = GameObject.Find("LeftHandController");
+            if (go != null)
+                m_LeftController = go.transform;
+        }
+    }
+
+    void ConfigureGrabForLift()
+    {
+        _grab = GetComponent<XRGrabInteractable>();
+
+        var t = transform.Find("GrabAttach");
+        if (t == null)
+        {
+            var go = new GameObject("GrabAttach");
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.Euler(180f, 0f, 0f);
+            t = go.transform;
+        }
+
+        _grab.attachTransform = t;
+        _grab.enabled = true;
+        _grab.movementType = XRBaseInteractable.MovementType.Instantaneous;
+        _grab.trackPosition = true;
+        _grab.trackRotation = false;
+        _grab.throwOnDetach = false;
+        _grab.forceGravityOnDetach = true;
+        _grab.retainTransformParent = true;
+        _grab.selectEntered.AddListener(OnBookSelectEntered);
+        _grab.selectExited.AddListener(OnBookSelectExited);
+
+        _rb = GetComponent<Rigidbody>();
+        _rb.isKinematic = false;
+        _rb.useGravity = true;
+        _rb.constraints = RigidbodyConstraints.None;
+        _rb.interpolation = RigidbodyInterpolation.Interpolate;
+        _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        _rb.linearDamping = 2.5f;
+        _rb.angularDamping = 2.5f;
+        _rbKinematicDefault = _rb.isKinematic;
+        _rbDetectCollisionsDefault = _rb.detectCollisions;
+
+        EnsureGrabCollider();
+        CacheBookColliders();
+    }
+
+    void CacheBookColliders()
+    {
+        _bookColliders = GetComponentsInChildren<Collider>(true);
+        _bookColliderTriggerDefaults = new bool[_bookColliders.Length];
+        for (int i = 0; i < _bookColliders.Length; i++)
+            _bookColliderTriggerDefaults[i] = _bookColliders[i] != null && _bookColliders[i].isTrigger;
+    }
+
+    void EnsureGrabCollider()
+    {
+        var cols = GetComponentsInChildren<Collider>(true);
+        bool hasNonTrigger = false;
+        foreach (var c in cols)
+        {
+            if (c == null) continue;
+            if (!c.isTrigger)
+            {
+                hasNonTrigger = true;
+                break;
+            }
+        }
+
+        if (hasNonTrigger) return;
+
+        // If authoring left only trigger colliders, add a solid grab collider automatically.
+        var box = GetComponent<BoxCollider>();
+        if (box == null) box = gameObject.AddComponent<BoxCollider>();
+        box.isTrigger = false;
+        box.center = Vector3.zero;
+        box.size = new Vector3(0.16f, 0.05f, 0.22f);
+    }
+
+    void OnBookSelectEntered(SelectEnterEventArgs _)
+    {
+        // Prevent grabbed-book collision feedback from physically shoving the player rig.
+        SetBookCollidersTriggerOnly(true);
+        if (_rb != null)
+        {
+            _rb.linearVelocity = Vector3.zero;
+            _rb.angularVelocity = Vector3.zero;
+            _rb.isKinematic = true;
+            _rb.detectCollisions = false;
+        }
+    }
+
+    void OnBookSelectExited(SelectExitEventArgs _)
+    {
+        if (_rb != null)
+        {
+            _rb.isKinematic = _rbKinematicDefault;
+            _rb.detectCollisions = _rbDetectCollisionsDefault;
+        }
+        SetBookCollidersTriggerOnly(false);
+    }
+
+    void SetBookCollidersTriggerOnly(bool triggerOnly)
+    {
+        if (_bookColliders == null || _bookColliderTriggerDefaults == null) return;
+        for (int i = 0; i < _bookColliders.Length; i++)
+        {
+            var c = _bookColliders[i];
+            if (c == null) continue;
+            c.isTrigger = triggerOnly ? true : _bookColliderTriggerDefaults[i];
         }
     }
 
@@ -71,10 +205,17 @@ public class ProximityClueNote : MonoBehaviour
         EnsureEventSystem();
     }
 
+    private void OnDestroy()
+    {
+        if (_grab == null) return;
+        _grab.selectEntered.RemoveListener(OnBookSelectEntered);
+        _grab.selectExited.RemoveListener(OnBookSelectExited);
+    }
+
     // ── Update ────────────────────────────────────────────────────────────────
     private void Update()
     {
-        if (_solved || Camera.main == null) return;
+        if (Camera.main == null) return;
 
         bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
 
@@ -85,7 +226,14 @@ public class ProximityClueNote : MonoBehaviour
             _promptRoot.gameObject.SetActive(dist < proximityRadius && !panelOpen);
         }
 
-        if (panelOpen || m_RightController == null) return;
+        if (panelOpen)
+        {
+            RefreshCloseButtonInteractable();
+            UpdateNearCloseDismiss();
+            return;
+        }
+
+        if (m_RightController == null) return;
 
         // Grip detection — same pattern as clock and sofa
         var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
@@ -101,7 +249,35 @@ public class ProximityClueNote : MonoBehaviour
         float handDist = Vector3.Distance(m_RightController.position, transform.position);
         if (handDist > interactRadius) return;
 
-        ShowClue();
+        if (_progressSent) ShowClueAfterSolved();
+        else ShowClueFirstTime();
+    }
+
+    void UpdateNearCloseDismiss()
+    {
+        if (IsBookHeld() || _fading || _gotItBtn == null || !_gotItBtn.interactable)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var box = _gotItBtn.GetComponent<BoxCollider>();
+        if (box == null)
+        {
+            _nearCloseAccum = 0f;
+            return;
+        }
+
+        var b = box.bounds;
+        b.Expand(nearCloseBoundsExpand);
+        bool near = false;
+        if (m_RightController != null) near |= b.Contains(m_RightController.position);
+        if (m_LeftController != null) near |= b.Contains(m_LeftController.position);
+        if (near) _nearCloseAccum += Time.deltaTime;
+        else _nearCloseAccum = 0f;
+
+        if (_nearCloseAccum >= nearCloseDismissHoldSeconds)
+            HandleCloseIntent();
     }
 
     private void LateUpdate()
@@ -120,40 +296,157 @@ public class ProximityClueNote : MonoBehaviour
         // Clue panel follows headset
         if (_cluePanel != null && _cluePanel.activeSelf)
         {
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
     }
 
     // ── Interaction ───────────────────────────────────────────────────────────
-    private void ShowClue()
+    private void ShowClueFirstTime()
     {
-        if (_solved) return;
         _cluePanel.SetActive(true);
+        ResetPanelCanvasGroup();
+        StartCoroutine(FadeInPanelCoroutine());
         if (_promptRoot != null) _promptRoot.gameObject.SetActive(false);
 
         if (Camera.main != null)
         {
             Transform cam = Camera.main.transform;
-            _clueCanvas.transform.position = cam.position + cam.forward * 0.6f;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
             _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
         }
 
-        StartCoroutine(EnableGotItAfterDelay(5f));
+        _gotItBtn.onClick.RemoveAllListeners();
+        _gotItBtn.onClick.AddListener(Dismiss);
+        _gotItDelayElapsed = false;
+        StartCoroutine(EnableGotItAfterDelay(0.75f));
+    }
+
+    private void ShowClueAfterSolved()
+    {
+        _cluePanel.SetActive(true);
+        ResetPanelCanvasGroup();
+        StartCoroutine(FadeInPanelCoroutine());
+        if (_promptRoot != null) _promptRoot.gameObject.SetActive(false);
+
+        if (Camera.main != null)
+        {
+            Transform cam = Camera.main.transform;
+            _clueCanvas.transform.position = cam.position + cam.forward * ClueUiLayout.PanelForwardMeters;
+            _clueCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
+        }
+
+        _gotItBtn.onClick.RemoveAllListeners();
+        _gotItBtn.onClick.AddListener(HidePanelOnly);
+        _gotItDelayElapsed = true;
+        RefreshCloseButtonInteractable();
     }
 
     private IEnumerator EnableGotItAfterDelay(float delay)
     {
         _gotItBtn.interactable = false;
         yield return new WaitForSeconds(delay);
-        if (!_solved) _gotItBtn.interactable = true;
+        _gotItDelayElapsed = true;
+        RefreshCloseButtonInteractable();
     }
 
     private void Dismiss()
     {
-        _solved = true;
+        if (IsBookHeld() || _progressSent || _fading) return;
+        _progressSent = true;
+        StartCoroutine(FadeOutPanelCoroutine(true));
+    }
+
+    void HidePanelOnly()
+    {
+        if (IsBookHeld() || _fading) return;
+        StartCoroutine(FadeOutPanelCoroutine(false));
+    }
+
+    void HandleCloseIntent()
+    {
+        if (IsBookHeld()) return;
+        if (_progressSent) HidePanelOnly();
+        else Dismiss();
+    }
+
+    IEnumerator FadeOutPanelCoroutine(bool fireSolvedEvent)
+    {
+        _fading = true;
+        _nearCloseAccum = 0f;
+        var grip = _gotItBtn != null ? _gotItBtn.GetComponent<ClueGotItGripConfirm>() : null;
+        if (grip != null) grip.enabled = false;
+
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null)
+        {
+            if (_cluePanel != null) _cluePanel.SetActive(false);
+            if (grip != null) grip.enabled = true;
+            _fading = false;
+            yield break;
+        }
+
+        cg.interactable = false;
+        cg.blocksRaycasts = false;
+        float dur = Mathf.Max(0.12f, panelFadeOutSeconds);
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = 1f - u;
+            yield return null;
+        }
+
+        cg.alpha = 0f;
         _cluePanel.SetActive(false);
-        OnClueSolved?.Invoke(clueIndex);
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
+        if (grip != null) grip.enabled = true;
+        _fading = false;
+        if (fireSolvedEvent)
+            PuzzleManager.TryHandleClueSolved(clueIndex, this);
+    }
+
+    void ResetPanelCanvasGroup()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null) return;
+        cg.alpha = 1f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
+    }
+
+    bool IsBookHeld()
+    {
+        return _grab != null && _grab.isSelected;
+    }
+
+    void RefreshCloseButtonInteractable()
+    {
+        if (_gotItBtn == null) return;
+        _gotItBtn.interactable = _gotItDelayElapsed && !IsBookHeld() && !_fading;
+    }
+
+    IEnumerator FadeInPanelCoroutine()
+    {
+        var cg = _cluePanel != null ? _cluePanel.GetComponent<CanvasGroup>() : null;
+        if (cg == null || _cluePanel == null) yield break;
+
+        float dur = Mathf.Max(0.05f, panelFadeInSeconds);
+        float t = 0f;
+        cg.alpha = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            u = u * u * (3f - 2f * u);
+            cg.alpha = u;
+            yield return null;
+        }
+        cg.alpha = 1f;
     }
 
     // ── Build: floating prompt ────────────────────────────────────────────────
@@ -176,7 +469,7 @@ public class ProximityClueNote : MonoBehaviour
         tmp.fontStyle          = FontStyles.Bold;
         tmp.color              = PromptCol;
         tmp.alignment          = TextAlignmentOptions.Center;
-        tmp.enableWordWrapping = false;
+        tmp.textWrappingMode = TextWrappingModes.NoWrap;
         var trt      = txtObj.GetComponent<RectTransform>();
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
@@ -203,12 +496,13 @@ public class ProximityClueNote : MonoBehaviour
         if (xrRay != null) canvasObj.AddComponent(xrRay);
 
         var canvasRT = canvasObj.GetComponent<RectTransform>();
-        canvasRT.sizeDelta  = new Vector2(0.60f, 0.80f);
+        canvasRT.sizeDelta  = new Vector2(ClueUiLayout.PanelWidthMeters, ClueUiLayout.PanelHeightMeters);
         canvasRT.localScale = Vector3.one;
         _clueCanvas = canvas;
 
         // ── Paper panel ────────────────────────────────────────────────────
-        const float PW = 0.54f, PH = 0.74f;
+        float PW = ClueUiLayout.PanelWidthMeters - 0.04f;
+        float PH = ClueUiLayout.PanelHeightMeters - 0.04f;
         var panel = MakeRect("CluePanel", canvasObj.transform,
             new Vector2(PW, PH), Vector2.zero, BgPaper);
         _cluePanel = panel;
@@ -222,13 +516,23 @@ public class ProximityClueNote : MonoBehaviour
             "CLUE", headerH * 0.52f, FontStyles.Bold, InkFaded,
             TextAlignmentOptions.Center, new Vector2(PW * 0.85f, headerH), Vector2.zero);
 
-        // GOT IT button
-        float btnH = PH * 0.13f;
-        float btnY = -(PH * 0.5f) + btnH * 0.5f + PH * 0.04f;
+        float btnH = Mathf.Max(PH * 0.18f, 0.10f);
+        float btnW = Mathf.Max(PW * 0.78f, 0.26f);
+        float btnY = -(PH * 0.5f) + btnH * 0.5f + PH * 0.03f;
         _gotItBtn = MakeButton("GotItBtn", "GOT IT",
-            panel.transform, new Vector2(0f, btnY), 0.28f, btnH);
+            panel.transform, new Vector2(0f, btnY), btnW, btnH);
         _gotItBtn.onClick.AddListener(Dismiss);
         _gotItBtn.interactable = false;
+        ClueUiLayout.WireGotItButtonForXrDirectSelect(_gotItBtn);
+        var gotItGrip = _gotItBtn.GetComponent<ClueGotItGripConfirm>();
+        if (gotItGrip != null)
+            gotItGrip.SetGripThresholds(0.84f, 0.2f, 0.38f);
+        var gotItBox = _gotItBtn.GetComponent<BoxCollider>();
+        if (gotItBox != null)
+        {
+            var s = gotItBox.size;
+            gotItBox.size = new Vector3(s.x * 1.12f, s.y * 1.18f, Mathf.Max(0.042f, s.z * 1.4f));
+        }
 
         // ── Sketch: CORNER → TABLE + GLOBE ────────────────────────────────
         const float SY = 0.03f;
@@ -267,6 +571,7 @@ public class ProximityClueNote : MonoBehaviour
             TextAlignmentOptions.Center,
             new Vector2(0.072f, 0.072f), new Vector2(tx, SY + 0.055f));
 
+        panel.AddComponent<CanvasGroup>();
         _cluePanel.SetActive(false);
     }
 
@@ -295,7 +600,7 @@ public class ProximityClueNote : MonoBehaviour
         tmp.fontStyle          = style;
         tmp.color              = color;
         tmp.alignment          = align;
-        tmp.enableWordWrapping = false;
+        tmp.textWrappingMode = TextWrappingModes.NoWrap;
         var rt                 = obj.GetComponent<RectTransform>();
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
         rt.sizeDelta        = size;
@@ -331,18 +636,24 @@ public class ProximityClueNote : MonoBehaviour
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
 
-        var box       = obj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.05f);
-
         return btn;
     }
 
     static void EnsureEventSystem()
     {
-        if (EventSystem.current != null) return;
-        var es = new GameObject("EventSystem");
-        es.AddComponent<EventSystem>();
-        es.AddComponent<StandaloneInputModule>();
+        var xrModule = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
+
+        if (EventSystem.current == null)
+        {
+            var es = new GameObject("EventSystem");
+            es.AddComponent<EventSystem>();
+            if (xrModule != null) es.AddComponent(xrModule);
+            else es.AddComponent<StandaloneInputModule>();
+        }
+        else if (xrModule != null && EventSystem.current.GetComponent(xrModule) == null)
+        {
+            EventSystem.current.gameObject.AddComponent(xrModule);
+        }
     }
 }

@@ -8,18 +8,18 @@ using UnityEngine.EventSystems;
 /// Auto-spawns at runtime and listens for DoorProximityHinge.OnDoorOpened.
 /// When the door opens it shows a congratulations panel in front of the player
 /// with a Play Again button that restarts the scene.
-/// Interaction works via VRHandPoker (OverlapSphere) — no ray caster needed.
+/// Interaction uses XR UI ray (TrackedDeviceGraphicRaycaster + XRUIInputModule).
 /// </summary>
 public class GameCompletionUI : MonoBehaviour
 {
     // ── Colours (matching FloatingAutoTimer theme) ────────────────────────
-    static readonly Color BgDark       = new Color(0.07f, 0.08f, 0.13f, 0.97f);
-    static readonly Color HeaderColor  = new Color(0.11f, 0.08f, 0.28f, 1.00f);
-    static readonly Color AccentPurple = new Color(0.50f, 0.25f, 0.90f, 1.00f);
-    static readonly Color AccentTeal   = new Color(0.10f, 0.62f, 0.68f, 1.00f);
-    static readonly Color GoldText     = new Color(1.00f, 0.84f, 0.18f, 1.00f);
-    static readonly Color TextPrimary  = new Color(0.94f, 0.94f, 1.00f, 1.00f);
-    static readonly Color TextSub      = new Color(0.70f, 0.88f, 1.00f, 1.00f);
+    static readonly Color BgDark       = MenuThemes.Hud.Background;
+    static readonly Color HeaderColor  = MenuThemes.Hud.Header;
+    static readonly Color AccentPurple = MenuThemes.Hud.AccentPrimary;
+    static readonly Color AccentTeal   = MenuThemes.Hud.AccentSecondary;
+    static readonly Color GoldText     = MenuThemes.Hud.TimerGold;
+    static readonly Color TextPrimary  = MenuThemes.Hud.TextPrimary;
+    static readonly Color TextSub      = MenuThemes.Hud.TextSecondary;
 
     private Canvas           _canvas;
     private GameObject       _panel;
@@ -97,17 +97,26 @@ public class GameCompletionUI : MonoBehaviour
         _canvas.renderMode = RenderMode.WorldSpace;
         canvasObj.AddComponent<CanvasScaler>();
         canvasObj.AddComponent<GraphicRaycaster>();
+        var xrRay = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster, Unity.XR.Interaction.Toolkit");
+        if (xrRay != null) canvasObj.AddComponent(xrRay);
 
         var canvasRT = canvasObj.GetComponent<RectTransform>();
         canvasRT.sizeDelta  = new Vector2(1.6f, 1.1f);
         canvasRT.localScale = Vector3.one;
 
-        // Ensure an EventSystem exists
+        var xrModule = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
         if (EventSystem.current == null)
         {
             var es = new GameObject("EventSystem");
             es.AddComponent<EventSystem>();
-            es.AddComponent<StandaloneInputModule>();
+            if (xrModule != null) es.AddComponent(xrModule);
+            else es.AddComponent<StandaloneInputModule>();
+        }
+        else if (xrModule != null && EventSystem.current.GetComponent(xrModule) == null)
+        {
+            EventSystem.current.gameObject.AddComponent(xrModule);
         }
 
         // Panel card
@@ -121,7 +130,7 @@ public class GameCompletionUI : MonoBehaviour
             new Vector2(1.30f, 0.18f), new Vector2(0f, 0.37f), HeaderColor);
         MakeLabel("HeaderLabel", header.transform,
             "ESCAPE ROOM", 0.070f, FontStyles.Bold,
-            new Color(0.70f, 0.55f, 1.00f, 1f), TextAlignmentOptions.Center,
+            MenuThemes.Hud.AccentPrimary, TextAlignmentOptions.Center,
             new Vector2(1.10f, 0.18f), Vector2.zero);
 
         // "YOU ESCAPED!" — sits below the header with a clear gap
@@ -139,7 +148,7 @@ public class GameCompletionUI : MonoBehaviour
         // Score divider line
         var divider = new GameObject("Divider");
         divider.transform.SetParent(_panel.transform, false);
-        divider.AddComponent<Image>().color = new Color(0.50f, 0.25f, 0.90f, 0.45f);
+        divider.AddComponent<Image>().color = new Color(MenuThemes.Hud.AccentPrimary.r, MenuThemes.Hud.AccentPrimary.g, MenuThemes.Hud.AccentPrimary.b, 0.45f);
         var drt = divider.GetComponent<RectTransform>();
         drt.anchorMin = drt.anchorMax = drt.pivot = new Vector2(0.5f, 0.5f);
         drt.sizeDelta        = new Vector2(1.10f, 0.004f);
@@ -165,7 +174,7 @@ public class GameCompletionUI : MonoBehaviour
         _breakdownLine                 = bdObj.AddComponent<TextMeshProUGUI>();
         _breakdownLine.text            = "";
         _breakdownLine.fontSize        = 0.036f;
-        _breakdownLine.color           = new Color(0.70f, 0.88f, 1.00f, 0.85f);
+        _breakdownLine.color           = new Color(MenuThemes.Hud.TextSecondary.r, MenuThemes.Hud.TextSecondary.g, MenuThemes.Hud.TextSecondary.b, 0.85f);
         _breakdownLine.alignment       = TextAlignmentOptions.Center;
         _breakdownLine.textWrappingMode = TextWrappingModes.NoWrap;
         var brt2 = bdObj.GetComponent<RectTransform>();
@@ -267,11 +276,6 @@ public class GameCompletionUI : MonoBehaviour
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
-
-        // BoxCollider so VRHandPoker's OverlapSphere can detect it
-        var box       = btnObj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.08f);
 
         return btn;
     }

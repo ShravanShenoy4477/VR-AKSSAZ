@@ -4,19 +4,21 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using TMPro;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
 /// Singleton that wires together the full puzzle chain.
 ///
 /// Responsibilities:
 ///   - Hides the key at game start (uses an Inspector-assigned key object).
-///   - Listens to OnClueSolved from ClueNote, ProximityClueNote, GlobeClueReveal.
+///   - Receives clue solve reports from clue scripts (single source of truth).
 ///   - Shows a "Clue X/3 Solved" progress toast after each real clue.
 ///   - Reveals the key and shows "KEY REVEALED!" when all 3 clues are solved.
 ///   - Resets correctly when the scene is reloaded (Play Again).
 ///
 /// Setup: Attach this script to an empty GameObject named "PuzzleManager" in the scene.
-/// Do NOT delete it from the scene — it subscribes to clue events in Awake().
+/// Do NOT delete it from the scene — clue scripts report completion to this manager.
 /// </summary>
 [DisallowMultipleComponent]
 public class PuzzleManager : MonoBehaviour
@@ -28,15 +30,54 @@ public class PuzzleManager : MonoBehaviour
     [Tooltip("Drag the key GameObject here. It will be hidden at start and revealed after all clues.")]
     public GameObject keyObject;
 
+    [Header("Scene references")]
+    [Tooltip("Optional: exact door hinge that should accept only this key instance.")]
+    [SerializeField] DoorProximityHinge doorHinge;
+    [Tooltip("Optional: explicit door-knob target for guidance lights. If empty, uses door trigger collider center.")]
+    [SerializeField] Transform doorGuideTarget;
+
     [Tooltip("Light that will be enabled when all 3 clues are revealed.")]
     public Light revealLight;
+
+    [Header("Key grab comfort")]
+    [Tooltip("Attach offset on the key for natural horizontal hold (in local space of the key/grab object).")]
+    [SerializeField] Vector3 keyGrabAttachLocalOffset = new Vector3(0f, 0f, 0f);
+    [SerializeField] Vector3 keyGrabAttachLocalEuler = new Vector3(0f, 0f, 90f);
+
+    [Header("Door guidance (on key pickup)")]
+    [SerializeField] bool enableDoorGuidanceOnKeyPickup = true;
+    [SerializeField] Color doorGuideColor = new Color(1f, 0.88f, 0.45f, 1f);
+    [SerializeField] float doorGuideSpotIntensity = 2.6f;
+    [SerializeField] float doorGuideSpotRange = 4.6f;
+    [SerializeField] float doorGuideSpotAngle = 34f;
+    [SerializeField] Vector3 doorGuideSpotOffset = new Vector3(0f, 0.12f, 0.10f);
+    [SerializeField] float doorGuideHingeFillIntensity = 1.1f;
+    [SerializeField] float doorGuideHingePulseIntensity = 2.2f;
+    [SerializeField] float doorGuideHingePulseRange = 1.8f;
+    [SerializeField] float doorGuideHingePulseAngle = 28f;
+    [SerializeField] Vector3 doorGuideHingePulseOffset = new Vector3(0f, 0f, 0f);
+    [SerializeField] float doorGuidePulseSpeed = 3.8f;
+    [SerializeField] float doorGuidePulseAmount = 0.25f;
+    [Header("Key spotlight fallback")]
+    [SerializeField] Color keyGuideColor = new Color(1f, 0.94f, 0.82f, 1f);
+    [SerializeField] float keyGuideIntensity = 3.1f;
+    [SerializeField] float keyGuideRange = 2.4f;
+    [SerializeField] float keyGuideAngle = 46f;
+    [SerializeField] Vector3 keyGuideOffset = new Vector3(0.22f, 0.30f, 0.20f);
+
+    [Header("Progress toast placement (head-relative)")]
+    [SerializeField] float notifForwardMeters = 0.48f;
+    [SerializeField] float notifRightMeters = 0.06f;
+    [SerializeField] float notifUpMeters = -0.03f;
+    [Tooltip("Log each time a toast is shown (paste if it still clips or sits wrong).")]
+    [SerializeField] bool debugNotifPlacement;
 
     // ── Events ────────────────────────────────────────────────────────────────
     /// <summary>Fired when all required clues are solved and the key is revealed.</summary>
     public static event System.Action OnPuzzleComplete;
 
-    /// <summary>Number of required clue completion events received so far.</summary>
-    public static int SolvedClueCount => _instance != null ? _instance._solvedClueEventCount : 0;
+    /// <summary>Number of unique required clues solved so far.</summary>
+    public static int SolvedClueCount => _instance != null ? _instance._solvedClues.Count : 0;
 
     // ── Colours ───────────────────────────────────────────────────────────────
     static readonly Color BgDark      = new Color(0.07f, 0.08f, 0.13f, 0.95f);
@@ -49,9 +90,7 @@ public class PuzzleManager : MonoBehaviour
     private static PuzzleManager _instance;
 
     private readonly HashSet<int> _solvedClues = new HashSet<int>();
-    private int    _solvedClueEventCount = 0;
     private bool       _puzzleComplete = false;
-    private GameObject _keyObject;
 
     // Notification HUD
     private Canvas          _notifCanvas;
@@ -60,6 +99,14 @@ public class PuzzleManager : MonoBehaviour
     private TextMeshProUGUI _titleText;
     private TextMeshProUGUI _bodyText;
     private Coroutine       _dismissRoutine;
+    private XRGrabInteractable _keyGrabInteractable;
+    private Light _doorGuideSpot;
+    private Light _doorGuideHingeFill;
+    private Light _doorGuideHingePulseSpot;
+    private Light _keyGuideSpot;
+    private Vector3 _doorGuideTargetWorld;
+    private bool _hasDoorGuideTarget;
+    private bool _doorGuidanceActive;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void Awake()
@@ -71,9 +118,6 @@ public class PuzzleManager : MonoBehaviour
         }
 
         _instance = this;
-        ClueNote.OnClueSolved          += HandleClueSolved;
-        ProximityClueNote.OnClueSolved += HandleClueSolved;
-        GlobeClueReveal.OnClueSolved   += HandleClueSolved;
 
         SceneManager.sceneLoaded += OnSceneLoaded;
 
@@ -83,14 +127,17 @@ public class PuzzleManager : MonoBehaviour
     void Start()
     {
         FindAndHideKey();
+        WireDoorToExactKey();
+        ConfigureKeyGrabComfortAndGuidance();
+        RefreshSequentialClueProps();
     }
 
     void OnDestroy()
     {
+        UnsubscribeKeyGrabGuidance();
+        if (_keyGuideSpot != null)
+            Destroy(_keyGuideSpot.gameObject);
         if (_instance == this) _instance = null;
-        ClueNote.OnClueSolved          -= HandleClueSolved;
-        ProximityClueNote.OnClueSolved -= HandleClueSolved;
-        GlobeClueReveal.OnClueSolved   -= HandleClueSolved;
 
         SceneManager.sceneLoaded -= OnSceneLoaded;
     }
@@ -99,28 +146,61 @@ public class PuzzleManager : MonoBehaviour
     void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         _solvedClues.Clear();
-        _solvedClueEventCount = 0;
         _puzzleComplete = false;
-        _keyObject      = null;
         if (_notifPanel != null) _notifPanel.SetActive(false);
 
         // Disable the reveal light when scene reloads
         if (revealLight != null)
             revealLight.enabled = false;
+        SetDoorGuidanceEnabled(false);
 
         // Wait one frame so all scene objects exist before searching for the key
         StartCoroutine(HideKeyNextFrame());
+    }
+
+    /// <summary>
+    /// Entry point used by clue scripts. Returns true only for the first time a clue index is accepted.
+    /// </summary>
+    public static bool TryHandleClueSolved(int clueIndex, Object source = null)
+    {
+        if (_instance == null)
+        {
+            Debug.LogWarning($"[PuzzleManager] Ignored clue {clueIndex}: no PuzzleManager in scene.");
+            return false;
+        }
+        return _instance.HandleClueSolved(clueIndex, source);
     }
 
     IEnumerator HideKeyNextFrame()
     {
         yield return null;
         FindAndHideKey();
+        WireDoorToExactKey();
+        RefreshSequentialClueProps();
+    }
+
+    /// <summary>Only clue 1 is available at start; clue 2 after 1 solved; clue 3 after 2 solved.</summary>
+    void RefreshSequentialClueProps()
+    {
+        foreach (var p in Object.FindObjectsByType<ProximityClueNote>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (p.clueIndex == 2)
+                p.gameObject.SetActive(_solvedClues.Contains(1));
+        }
+
+        foreach (var g in Object.FindObjectsByType<GlobeClueReveal>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (g.clueIndex == 3)
+                g.gameObject.SetActive(_solvedClues.Contains(1) && _solvedClues.Contains(2));
+        }
     }
 
     // ── Key management ────────────────────────────────────────────────────────
     void FindAndHideKey()
     {
+        UnsubscribeKeyGrabGuidance();
+        SetDoorGuidanceEnabled(false);
+        SetKeyGuideLightEnabled(false);
         if (keyObject != null)
         {
             keyObject.SetActive(false);
@@ -136,7 +216,7 @@ public class PuzzleManager : MonoBehaviour
     {
         if (keyObject != null)
         {
-            keyObject.SetActive(true);
+            NotifyKeyRevealedFromClock(keyObject);
             Debug.Log("[PuzzleManager] Key revealed!");
         }
         else
@@ -165,23 +245,171 @@ public class PuzzleManager : MonoBehaviour
         }
     }
 
-    // ── Clue handling ─────────────────────────────────────────────────────────
-    void HandleClueSolved(int clueIndex)
+    void WireDoorToExactKey()
     {
-        if (_puzzleComplete) return;
+        if (keyObject == null) return;
+        if (doorHinge == null)
+            doorHinge = Object.FindFirstObjectByType<DoorProximityHinge>();
+        if (doorHinge != null)
+            doorHinge.SetKeyObject(keyObject);
+    }
 
-        _solvedClueEventCount++;
-        _solvedClues.Add(clueIndex);
+    /// <summary>
+    /// Called by clock reveal flow so key orientation + pickup guidance are always configured.
+    /// </summary>
+    public void NotifyKeyRevealedFromClock(GameObject revealedKey = null)
+    {
+        if (revealedKey != null)
+            keyObject = revealedKey;
 
-        if (_solvedClues.Count != _solvedClueEventCount)
+        if (keyObject == null)
+            return;
+
+        keyObject.SetActive(true);
+        WireDoorToExactKey();
+        ConfigureKeyGrabComfortAndGuidance();
+        SetDoorGuidanceEnabled(true);
+        if (_keyGrabInteractable != null && _keyGrabInteractable.isSelected)
+            OnKeyPickedUp(null);
+    }
+
+    void ConfigureKeyGrabComfortAndGuidance()
+    {
+        if (keyObject == null) return;
+
+        _keyGrabInteractable = keyObject.GetComponentInChildren<XRGrabInteractable>(true);
+        if (_keyGrabInteractable == null) return;
+
+        var attach = _keyGrabInteractable.transform.Find("KeyGrabAttach");
+        if (attach == null)
         {
-            Debug.LogWarning(
-                $"[PuzzleManager] Clue event count {_solvedClueEventCount} differs from unique clue indices {_solvedClues.Count}. " +
-                $"Incoming clueIndex={clueIndex}. Completion will use the event count so the puzzle can still finish.");
+            var go = new GameObject("KeyGrabAttach");
+            go.transform.SetParent(_keyGrabInteractable.transform, false);
+            attach = go.transform;
+        }
+        attach.localPosition = keyGrabAttachLocalOffset;
+        attach.localRotation = Quaternion.Euler(keyGrabAttachLocalEuler);
+        _keyGrabInteractable.attachTransform = attach;
+
+        UnsubscribeKeyGrabGuidance();
+        _keyGrabInteractable.selectEntered.AddListener(OnKeyPickedUp);
+    }
+
+    void UnsubscribeKeyGrabGuidance()
+    {
+        if (_keyGrabInteractable != null)
+            _keyGrabInteractable.selectEntered.RemoveListener(OnKeyPickedUp);
+        _keyGrabInteractable = null;
+    }
+
+    void OnKeyPickedUp(SelectEnterEventArgs _)
+    {
+        SetDoorGuidanceEnabled(true);
+        SetKeyGuideLightEnabled(true);
+        ShowNotification(
+            "QUEST UPDATED",
+            "Move to the pulsating hinge light and use the key to complete your escape.",
+            AccentGreen, autoDismissSeconds: 5f);
+    }
+
+    void SetDoorGuidanceEnabled(bool on)
+    {
+        _doorGuidanceActive = on;
+        if (!on)
+        {
+            if (_doorGuideSpot != null) _doorGuideSpot.enabled = false;
+            if (_doorGuideHingeFill != null) _doorGuideHingeFill.enabled = false;
+            if (_doorGuideHingePulseSpot != null) _doorGuideHingePulseSpot.enabled = false;
+            return;
         }
 
+        if (doorHinge == null)
+            doorHinge = Object.FindFirstObjectByType<DoorProximityHinge>();
+        if (doorHinge == null) return;
+
+        if (!TryResolveDoorGuideTarget(out var target))
+            return;
+        _doorGuideTargetWorld = target;
+        _hasDoorGuideTarget = true;
+
+        if (_doorGuideSpot == null)
+        {
+            var go = new GameObject("DoorGuideSpot");
+            _doorGuideSpot = go.AddComponent<Light>();
+            _doorGuideSpot.type = LightType.Spot;
+            _doorGuideSpot.shadows = LightShadows.None;
+        }
+
+        _doorGuideSpot.color = doorGuideColor;
+        _doorGuideSpot.intensity = doorGuideSpotIntensity;
+        _doorGuideSpot.range = doorGuideSpotRange;
+        _doorGuideSpot.spotAngle = doorGuideSpotAngle;
+        _doorGuideSpot.transform.position = _doorGuideTargetWorld + doorGuideSpotOffset;
+        _doorGuideSpot.transform.rotation = Quaternion.LookRotation((_doorGuideTargetWorld - _doorGuideSpot.transform.position).normalized, Vector3.up);
+        _doorGuideSpot.enabled = true;
+
+        if (_doorGuideHingeFill == null)
+        {
+            var go = new GameObject("DoorGuideHingeFill");
+            _doorGuideHingeFill = go.AddComponent<Light>();
+            _doorGuideHingeFill.type = LightType.Point;
+            _doorGuideHingeFill.shadows = LightShadows.None;
+        }
+
+        _doorGuideHingeFill.color = doorGuideColor;
+        _doorGuideHingeFill.range = 1.25f;
+        _doorGuideHingeFill.intensity = doorGuideHingeFillIntensity;
+        _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + new Vector3(0f, 0.10f, 0f);
+        _doorGuideHingeFill.enabled = true;
+
+        if (_doorGuideHingePulseSpot == null)
+        {
+            var go = new GameObject("DoorGuideHingePulseSpot");
+            _doorGuideHingePulseSpot = go.AddComponent<Light>();
+            _doorGuideHingePulseSpot.type = LightType.Point;
+            _doorGuideHingePulseSpot.shadows = LightShadows.None;
+        }
+
+        _doorGuideHingePulseSpot.color = doorGuideColor;
+        _doorGuideHingePulseSpot.range = doorGuideHingePulseRange;
+        _doorGuideHingePulseSpot.spotAngle = doorGuideHingePulseAngle;
+        _doorGuideHingePulseSpot.intensity = doorGuideHingePulseIntensity;
+        _doorGuideHingePulseSpot.transform.position = _doorGuideTargetWorld + doorGuideHingePulseOffset;
+        _doorGuideHingePulseSpot.enabled = true;
+    }
+
+    // ── Clue handling ─────────────────────────────────────────────────────────
+    bool HandleClueSolved(int clueIndex, Object source)
+    {
+        if (_puzzleComplete) return false;
+        if (clueIndex <= 0)
+        {
+            Debug.LogWarning($"[PuzzleManager] Invalid clue index {clueIndex} from '{(source != null ? source.name : "unknown")}'.");
+            return false;
+        }
+
+        if (!_solvedClues.Add(clueIndex))
+        {
+            Debug.Log($"[PuzzleManager] Ignored duplicate clue solve {clueIndex} from '{(source != null ? source.name : "unknown")}'.");
+            return false;
+        }
+
+        ApplyClueSpecificChanges(clueIndex);
+
         // Count how many of the required clues are done
-        int solved = Mathf.Min(_solvedClueEventCount, RequiredClues.Length);
+        int solved = Mathf.Min(_solvedClues.Count, RequiredClues.Length);
+
+        RefreshSequentialClueProps();
+
+        // Reveal key as soon as clue 3 (globe) is completed.
+        // With sequential gating, clue 3 implies clue 1+2 are already done.
+        if (clueIndex == 3 && keyObject != null && !keyObject.activeSelf)
+        {
+            ShowNotification(
+                "FINAL STEP",
+                "Open the clock to reveal the key.",
+                AccentGreen, autoDismissSeconds: 6f);
+        }
 
         if (solved < RequiredClues.Length)
         {
@@ -190,18 +418,32 @@ public class PuzzleManager : MonoBehaviour
                 $"Clue {solved} / {RequiredClues.Length} Solved",
                 GetProgressMessage(solved),
                 AccentBlue, autoDismissSeconds: 4f);
-            return;
+            return true;
         }
 
         // All required clues solved
         _puzzleComplete = true;
         ShowNotification(
-            "KEY REVEALED!",
-            "All clues solved.\nFind the key and escape!",
+            "ALL CLUES SOLVED!",
+            "Find the key behind the clock and bring it to the door.",
             AccentGreen, autoDismissSeconds: 7f);
-        RevealKey();
         
         OnPuzzleComplete?.Invoke();
+        return true;
+    }
+
+    void ApplyClueSpecificChanges(int clueIndex)
+    {
+        // Keep clue-index specific logic centralized here as the puzzle evolves.
+        switch (clueIndex)
+        {
+            case 1:
+                break;
+            case 2:
+                break;
+            case 3:
+                break;
+        }
     }
 
     static string GetProgressMessage(int solved)
@@ -225,27 +467,162 @@ public class PuzzleManager : MonoBehaviour
         _accentBar.color = accent;
 
         _notifPanel.SetActive(true);
-        PositionInFrontOfCamera(0.9f, -0.22f);
+        PositionNotificationCanvas();
+
+        if (debugNotifPlacement && Camera.main != null)
+        {
+            var p = _notifCanvas != null ? _notifCanvas.transform.position : Vector3.zero;
+            Debug.Log(
+                $"[PuzzleManager] Toast '{title}' camPos={Camera.main.transform.position} notifPos={p} " +
+                $"fwd={notifForwardMeters} up={notifUpMeters} right={notifRightMeters}");
+        }
 
         if (_dismissRoutine != null) StopCoroutine(_dismissRoutine);
         _dismissRoutine = StartCoroutine(AutoDismiss(autoDismissSeconds));
     }
 
-    void PositionInFrontOfCamera(float distance, float verticalOffset)
+    void PositionNotificationCanvas()
     {
-        if (Camera.main == null) return;
+        if (Camera.main == null || _notifCanvas == null) return;
         Transform cam = Camera.main.transform;
         _notifCanvas.transform.position =
-            cam.position + cam.forward * distance + Vector3.up * verticalOffset;
-        _notifCanvas.transform.rotation =
-            Quaternion.Euler(0f, cam.rotation.eulerAngles.y, 0f);
+            cam.position
+            + cam.forward * notifForwardMeters
+            + cam.right * notifRightMeters
+            + cam.up * notifUpMeters;
+        _notifCanvas.transform.rotation = Quaternion.LookRotation(cam.forward, Vector3.up);
     }
 
     void LateUpdate()
     {
-        // Keep the notification facing the player while it is visible
+        UpdateKeyGuideLight();
+        if (keyObject != null && keyObject.activeInHierarchy && !_doorGuidanceActive)
+            SetDoorGuidanceEnabled(true);
+        if (_keyGrabInteractable != null && _keyGrabInteractable.isSelected && !_doorGuidanceActive)
+            SetDoorGuidanceEnabled(true);
+
+        if (_doorGuidanceActive)
+            UpdateDoorGuidancePulse();
         if (_notifPanel != null && _notifPanel.activeSelf)
-            PositionInFrontOfCamera(0.9f, -0.22f);
+            PositionNotificationCanvas();
+    }
+
+    void UpdateKeyGuideLight()
+    {
+        bool keyActive = keyObject != null && keyObject.activeInHierarchy;
+        if (!keyActive)
+        {
+            SetKeyGuideLightEnabled(false);
+            return;
+        }
+
+        SetKeyGuideLightEnabled(true);
+        if (_keyGuideSpot == null) return;
+
+        Vector3 target = keyObject.transform.position;
+        Vector3 pos = target + keyGuideOffset;
+        _keyGuideSpot.transform.position = pos;
+        Vector3 toKey = target - pos;
+        if (toKey.sqrMagnitude < 0.0001f) toKey = Vector3.down;
+        _keyGuideSpot.transform.rotation = Quaternion.LookRotation(toKey.normalized, Vector3.up);
+    }
+
+    void SetKeyGuideLightEnabled(bool on)
+    {
+        if (!on)
+        {
+            if (_keyGuideSpot != null) _keyGuideSpot.enabled = false;
+            return;
+        }
+
+        if (_keyGuideSpot == null)
+        {
+            var go = new GameObject("PuzzleKeyGuideSpot");
+            _keyGuideSpot = go.AddComponent<Light>();
+            _keyGuideSpot.type = LightType.Spot;
+            _keyGuideSpot.shadows = LightShadows.None;
+        }
+
+        _keyGuideSpot.color = keyGuideColor;
+        _keyGuideSpot.intensity = keyGuideIntensity;
+        _keyGuideSpot.range = keyGuideRange;
+        _keyGuideSpot.spotAngle = keyGuideAngle;
+        _keyGuideSpot.enabled = true;
+    }
+
+    void UpdateDoorGuidancePulse()
+    {
+        if (!TryResolveDoorGuideTarget(out var target))
+        {
+            _hasDoorGuideTarget = false;
+            return;
+        }
+        _doorGuideTargetWorld = target;
+        _hasDoorGuideTarget = true;
+
+        if (!_hasDoorGuideTarget) return;
+
+        // Keep all guidance lights locked to knob target every frame.
+        if (_doorGuideSpot != null)
+        {
+            _doorGuideSpot.transform.position = _doorGuideTargetWorld + doorGuideSpotOffset;
+            _doorGuideSpot.transform.rotation =
+                Quaternion.LookRotation((_doorGuideTargetWorld - _doorGuideSpot.transform.position).normalized, Vector3.up);
+        }
+        if (_doorGuideHingeFill != null)
+            _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + new Vector3(0f, 0.10f, 0f);
+        if (_doorGuideHingePulseSpot != null)
+            _doorGuideHingePulseSpot.transform.position = _doorGuideTargetWorld + doorGuideHingePulseOffset;
+
+        if (_doorGuideSpot != null && _doorGuideSpot.enabled)
+        {
+            float pulse = 1f + Mathf.Sin(Time.time * doorGuidePulseSpeed) * doorGuidePulseAmount;
+            _doorGuideSpot.intensity = doorGuideSpotIntensity * pulse;
+        }
+        if (_doorGuideHingeFill != null && _doorGuideHingeFill.enabled)
+        {
+            float pulse = 1f + Mathf.Sin(Time.time * (doorGuidePulseSpeed * 1.15f)) * (doorGuidePulseAmount * 0.7f);
+            _doorGuideHingeFill.intensity = doorGuideHingeFillIntensity * pulse;
+        }
+        if (_doorGuideHingePulseSpot != null && _doorGuideHingePulseSpot.enabled)
+        {
+            float pulse = 0.55f + Mathf.Abs(Mathf.Sin(Time.time * (doorGuidePulseSpeed * 1.15f)));
+            _doorGuideHingePulseSpot.intensity = doorGuideHingePulseIntensity * pulse;
+        }
+    }
+
+    bool TryResolveDoorGuideTarget(out Vector3 target)
+    {
+        if (doorGuideTarget != null)
+        {
+            target = doorGuideTarget.position;
+            return true;
+        }
+
+        if (doorHinge == null)
+            doorHinge = Object.FindFirstObjectByType<DoorProximityHinge>();
+        if (doorHinge == null)
+        {
+            target = Vector3.zero;
+            return false;
+        }
+
+        var knobCollider = doorHinge.GetComponent<Collider>();
+        if (knobCollider != null)
+        {
+            target = knobCollider.bounds.center;
+            return true;
+        }
+
+        var hinge = doorHinge.HingePivotTransform;
+        if (hinge != null)
+        {
+            target = hinge.position + new Vector3(0f, 0.95f, -0.55f);
+            return true;
+        }
+
+        target = Vector3.zero;
+        return false;
     }
 
     IEnumerator AutoDismiss(float delay)

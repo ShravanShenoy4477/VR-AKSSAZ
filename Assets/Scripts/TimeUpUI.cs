@@ -10,18 +10,18 @@ using UnityEngine.EventSystems;
 ///
 /// Game logic (puzzle system) is disabled to prevent clue reveals/solving.
 /// Player can still move and interact with physics objects via locomotion providers.
-/// Play Again button uses standard Button component for reliable interaction.
+/// Play Again uses XR UI ray interaction (no 3D colliders on buttons).
 /// </summary>
 [DisallowMultipleComponent]
 public class TimeUpUI : MonoBehaviour
 {
     // ── Colours ───────────────────────────────────────────────────────────────
-    static readonly Color BgDark      = new Color(0.06f, 0.04f, 0.04f, 0.97f);
-    static readonly Color HeaderColor = new Color(0.28f, 0.06f, 0.06f, 1.00f);
-    static readonly Color AccentRed   = new Color(0.85f, 0.18f, 0.18f, 1.00f);
-    static readonly Color AccentTeal  = new Color(0.10f, 0.62f, 0.68f, 1.00f);
-    static readonly Color TextSub     = new Color(1.00f, 0.70f, 0.70f, 1.00f);
-    static readonly Color TextPrimary = new Color(0.94f, 0.94f, 1.00f, 1.00f);
+    static readonly Color BgDark      = MenuThemes.Hud.Background;
+    static readonly Color HeaderColor = new Color(MenuThemes.Hud.Warning.r * 0.35f, MenuThemes.Hud.Warning.g * 0.35f, MenuThemes.Hud.Warning.b * 0.35f, 1f);
+    static readonly Color AccentRed   = MenuThemes.Hud.Warning;
+    static readonly Color AccentTeal  = MenuThemes.Hud.AccentSecondary;
+    static readonly Color TextSub     = MenuThemes.Hud.TextDanger;
+    static readonly Color TextPrimary = MenuThemes.Hud.TextPrimary;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     private Canvas    _canvas;
@@ -139,7 +139,7 @@ public class TimeUpUI : MonoBehaviour
             new Vector2(0.70f, 0.10f), new Vector2(0f, 0.25f), HeaderColor);
         MakeLabel("HeaderLabel", header.transform,
             "ESCAPE ROOM", 0.036f, FontStyles.Bold,
-            new Color(1.00f, 0.45f, 0.45f, 1f), TextAlignmentOptions.Center,
+            MenuThemes.Hud.TextDanger, TextAlignmentOptions.Center,
             new Vector2(0.60f, 0.10f), Vector2.zero);
 
         // Title
@@ -157,7 +157,7 @@ public class TimeUpUI : MonoBehaviour
         // Divider
         var divider = new GameObject("Divider");
         divider.transform.SetParent(_panel.transform, false);
-        divider.AddComponent<Image>().color = new Color(0.85f, 0.18f, 0.18f, 0.40f);
+        divider.AddComponent<Image>().color = new Color(MenuThemes.Hud.Warning.r, MenuThemes.Hud.Warning.g, MenuThemes.Hud.Warning.b, 0.40f);
         var drt = divider.GetComponent<RectTransform>();
         drt.anchorMin = drt.anchorMax = drt.pivot = new Vector2(0.5f, 0.5f);
         drt.sizeDelta        = new Vector2(0.60f, 0.003f);
@@ -166,7 +166,7 @@ public class TimeUpUI : MonoBehaviour
         // Stats
         MakeLabel("StatsLabel", _panel.transform,
             "", 0.024f, FontStyles.Normal,
-            new Color(0.80f, 0.80f, 0.95f, 0.85f), TextAlignmentOptions.Center,
+            new Color(MenuThemes.Hud.TextPrimary.r, MenuThemes.Hud.TextPrimary.g, MenuThemes.Hud.TextPrimary.b, 0.85f), TextAlignmentOptions.Center,
             new Vector2(0.62f, 0.06f), new Vector2(0f, -0.135f));
 
         // Play Again button — uses standard Button component for reliable interaction
@@ -238,10 +238,20 @@ public class TimeUpUI : MonoBehaviour
 
     private static void EnsureEventSystem()
     {
-        if (EventSystem.current != null) return;
-        var es = new GameObject("EventSystem");
-        es.AddComponent<EventSystem>();
-        es.AddComponent<StandaloneInputModule>();
+        var xrModule = System.Type.GetType(
+            "UnityEngine.XR.Interaction.Toolkit.UI.XRUIInputModule, Unity.XR.Interaction.Toolkit");
+
+        if (EventSystem.current == null)
+        {
+            var es = new GameObject("EventSystem");
+            es.AddComponent<EventSystem>();
+            if (xrModule != null) es.AddComponent(xrModule);
+            else es.AddComponent<StandaloneInputModule>();
+        }
+        else if (xrModule != null && EventSystem.current.GetComponent(xrModule) == null)
+        {
+            EventSystem.current.gameObject.AddComponent(xrModule);
+        }
     }
 
     private static Button MakeButton(string name, string label,
@@ -277,11 +287,6 @@ public class TimeUpUI : MonoBehaviour
         trt.anchorMin = Vector2.zero;
         trt.anchorMax = Vector2.one;
         trt.sizeDelta = Vector2.zero;
-
-        // BoxCollider so VRHandPoker's OverlapSphere can detect it
-        var box       = btnObj.AddComponent<BoxCollider>();
-        box.isTrigger = true;
-        box.size      = new Vector3(w, h, 0.08f);
 
         return btn;
     }
