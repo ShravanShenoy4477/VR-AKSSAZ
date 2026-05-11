@@ -14022,7 +14022,7 @@ MonoBehaviour:
   m_TransformationPriority: 0
   m_MoveSpeed: 1.65
   m_InAirControlModifier: 0.5
-  m_EnableStrafe: 0
+  m_EnableStrafe: 1
   m_EnableFly: 0
   m_ForwardSource: {fileID: 0}
   m_LeftHandMoveInput:

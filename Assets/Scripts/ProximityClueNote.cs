@@ -59,10 +59,13 @@ public class ProximityClueNote : MonoBehaviour
     private bool       _rbKinematicDefault;
     private bool       _rbDetectCollisionsDefault;
     private bool       _progressSent;
-    private bool       _prevGrip = false;
+    private Coroutine  _holdRevealCo;
     private bool       _fading;
     private float      _nearCloseAccum;
     private bool       _gotItDelayElapsed;
+
+    [Header("Read timing")]
+    [SerializeField] float minHoldSecondsForClueReveal = 0.55f;
 
     [Header("Dismiss")]
     [SerializeField] float panelFadeInSeconds = 0.25f;
@@ -175,6 +178,16 @@ public class ProximityClueNote : MonoBehaviour
             _rb.isKinematic = true;
             _rb.detectCollisions = false;
         }
+
+        if (_progressSent)
+        {
+            ShowClueAfterSolved();
+            return;
+        }
+
+        if (_holdRevealCo != null) StopCoroutine(_holdRevealCo);
+        if (_cluePanel != null && _cluePanel.activeSelf) return;
+        _holdRevealCo = StartCoroutine(RevealWhileHeldAfterMinHold());
     }
 
     void OnBookSelectExited(SelectExitEventArgs _)
@@ -185,6 +198,28 @@ public class ProximityClueNote : MonoBehaviour
             _rb.detectCollisions = _rbDetectCollisionsDefault;
         }
         SetBookCollidersTriggerOnly(false);
+
+        if (_holdRevealCo != null)
+        {
+            StopCoroutine(_holdRevealCo);
+            _holdRevealCo = null;
+        }
+    }
+
+    IEnumerator RevealWhileHeldAfterMinHold()
+    {
+        try
+        {
+            yield return new WaitForSeconds(minHoldSecondsForClueReveal);
+            if (_progressSent) yield break;
+            if (!IsBookHeld()) yield break;
+            if (_cluePanel != null && _cluePanel.activeSelf) yield break;
+            ShowClueFirstTime();
+        }
+        finally
+        {
+            _holdRevealCo = null;
+        }
     }
 
     void SetBookCollidersTriggerOnly(bool triggerOnly)
@@ -207,6 +242,7 @@ public class ProximityClueNote : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (_holdRevealCo != null) StopCoroutine(_holdRevealCo);
         if (_grab == null) return;
         _grab.selectEntered.RemoveListener(OnBookSelectEntered);
         _grab.selectExited.RemoveListener(OnBookSelectExited);
@@ -216,6 +252,7 @@ public class ProximityClueNote : MonoBehaviour
     private void Update()
     {
         if (Camera.main == null) return;
+        bool unlocked = PuzzleManager.IsClueUnlocked(clueIndex);
 
         bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
 
@@ -223,7 +260,7 @@ public class ProximityClueNote : MonoBehaviour
         if (_promptRoot != null)
         {
             float dist = Vector3.Distance(Camera.main.transform.position, transform.position);
-            _promptRoot.gameObject.SetActive(dist < proximityRadius && !panelOpen);
+            _promptRoot.gameObject.SetActive(unlocked && dist < proximityRadius && !panelOpen);
         }
 
         if (panelOpen)
@@ -232,25 +269,6 @@ public class ProximityClueNote : MonoBehaviour
             UpdateNearCloseDismiss();
             return;
         }
-
-        if (m_RightController == null) return;
-
-        // Grip detection — same pattern as clock and sofa
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid) return;
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip)) return;
-
-        bool pressedEdge = grip && !_prevGrip;
-        _prevGrip = grip;
-
-        if (!pressedEdge) return;
-
-        // Hand must be within interactRadius of the book centre — player must physically reach it
-        float handDist = Vector3.Distance(m_RightController.position, transform.position);
-        if (handDist > interactRadius) return;
-
-        if (_progressSent) ShowClueAfterSolved();
-        else ShowClueFirstTime();
     }
 
     void UpdateNearCloseDismiss()

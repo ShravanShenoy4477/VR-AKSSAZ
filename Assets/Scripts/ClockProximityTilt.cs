@@ -30,6 +30,9 @@ public class ClockProximityTilt : MonoBehaviour
     [Tooltip("Optional. If unset, uses GameObject named RightHandController.")]
     [SerializeField]
     Transform m_RightController;
+    [Tooltip("Optional. If unset, uses GameObject named LeftHandController.")]
+    [SerializeField]
+    Transform m_LeftController;
 
     [Header("Tilt")]
     [SerializeField]
@@ -65,7 +68,8 @@ public class ClockProximityTilt : MonoBehaviour
     Quaternion m_ClosedLocalRotation;
     bool m_IsTilted;
     bool m_IsAnimating;
-    bool m_PrevSelect;
+    bool m_PrevSelectR;
+    bool m_PrevSelectL;
     Coroutine m_AnimateRoutine;
     float m_NextHeartbeatTime;
     bool m_LoggedMissingController;
@@ -124,6 +128,13 @@ public class ClockProximityTilt : MonoBehaviour
                 m_KeyObject = pm.keyObject;
         }
 
+        if (m_LeftController == null)
+        {
+            var go = GameObject.Find("LeftHandController");
+            if (go != null)
+                m_LeftController = go.transform;
+        }
+
         Log($"Awake: zone bounds (world) {m_Zone.bounds}, hinge='{m_HingePivot.name}' tiltDeg={m_TiltDegrees}");
     }
 
@@ -132,53 +143,58 @@ public class ClockProximityTilt : MonoBehaviour
         if (m_IsAnimating || m_Zone == null)
             return;
 
-        if (m_RightController == null)
+        if (m_RightController == null && m_LeftController == null)
         {
             if (!m_LoggedMissingController)
             {
                 m_LoggedMissingController = true;
-                LogWarning("Update: m_RightController is null — assign Right Controller or add an object named RightHandController.");
+                LogWarning("Update: controller references are null — assign hand controllers in Inspector.");
             }
             return;
         }
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid)
+        bool edgeR = ReadSelectEdge(XRNode.RightHand, ref m_PrevSelectR);
+        bool edgeL = ReadSelectEdge(XRNode.LeftHand, ref m_PrevSelectL);
+        bool inR = m_RightController != null && IsInsideZone(m_Zone, m_RightController.position);
+        bool inL = m_LeftController != null && IsInsideZone(m_Zone, m_LeftController.position);
+
+        if (!(inR || inL))
         {
-            HeartbeatMaybe(() => "XR RightHand device invalid (not tracking / not ready).");
-            return;
+            HeartbeatMaybe(() => "No hand in zone.");
         }
 
-        if (!device.TryGetFeatureValue(CommonUsages.triggerButton, out bool selectPressed))
-        {
-            HeartbeatMaybe(() => "TryGetFeatureValue(triggerButton) failed.");
-            return;
-        }
-
-        bool pressedEdge = selectPressed && !m_PrevSelect;
-        m_PrevSelect = selectPressed;
-
-        Vector3 handPos = m_RightController.position;
-        bool inside = IsInsideZone(m_Zone, handPos);
-
-        HeartbeatMaybe(() =>
-            $"hand='{m_RightController.name}' pos={handPos} inside={inside} select={selectPressed} tilted={m_IsTilted} device={device.name}");
-
+        bool pressedEdge = (edgeR && inR) || (edgeL && inL);
         if (!pressedEdge)
             return;
 
-        if (!inside)
-        {
-            Vector3 closest = m_Zone.ClosestPoint(handPos);
-            float d2 = (closest - handPos).sqrMagnitude;
-            Log($"Select edge IGNORED: outside zone. handPos={handPos} closest={closest} distSqr={d2:E3} (need ~0 inside)");
-            return;
-        }
+        bool puzzleReadyForClockReveal = PuzzleManager.SolvedClueCount >= 3;
+        if (!puzzleReadyForClockReveal)
+            InteractableHapticFeedback.ShowWrongOrderCue(transform);
 
         Log($"Select edge ACCEPTED: toggling tilt -> {!m_IsTilted}");
         if (m_AnimateRoutine != null)
             StopCoroutine(m_AnimateRoutine);
         m_AnimateRoutine = StartCoroutine(AnimateToTilted(!m_IsTilted));
+    }
+
+    bool ReadSelectEdge(XRNode hand, ref bool prevPressed)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(hand);
+        if (!device.isValid)
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        if (!device.TryGetFeatureValue(CommonUsages.triggerButton, out bool selectPressed))
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        bool edge = selectPressed && !prevPressed;
+        prevPressed = selectPressed;
+        return edge;
     }
 
     void HeartbeatMaybe(System.Func<string> message)

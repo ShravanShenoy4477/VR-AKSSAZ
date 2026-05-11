@@ -51,6 +51,7 @@ public class DecoyNote : MonoBehaviour
     private Button     _gotItBtn;
     private bool       _opened   = false;
     private bool       _prevGrip = false;
+    private bool       _prevGripL = false;
     private bool       _fading;
     private float      _nearCloseAccum;
 
@@ -106,21 +107,34 @@ public class DecoyNote : MonoBehaviour
             return;
         }
 
-        if (m_RightController == null) return;
+        if (m_RightController == null && m_LeftController == null) return;
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid) return;
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip)) return;
-
-        bool pressedEdge = grip && !_prevGrip;
-        _prevGrip = grip;
-
-        if (!pressedEdge) return;
-
-        float handDist = Vector3.Distance(m_RightController.position, transform.position);
-        if (handDist > interactRadius) return;
+        bool edgeR = ReadGripEdge(XRNode.RightHand, ref _prevGrip);
+        bool edgeL = ReadGripEdge(XRNode.LeftHand, ref _prevGripL);
+        bool nearR = m_RightController != null && Vector3.Distance(m_RightController.position, transform.position) <= interactRadius;
+        bool nearL = m_LeftController != null && Vector3.Distance(m_LeftController.position, transform.position) <= interactRadius;
+        if (!((edgeR && nearR) || (edgeL && nearL))) return;
 
         ShowClue();
+    }
+
+    bool ReadGripEdge(XRNode node, ref bool prev)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(node);
+        if (!device.isValid)
+        {
+            prev = false;
+            return false;
+        }
+        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip))
+        {
+            prev = false;
+            return false;
+        }
+
+        bool edge = grip && !prev;
+        prev = grip;
+        return edge;
     }
 
     void UpdateNearCloseDismiss()
@@ -172,6 +186,8 @@ public class DecoyNote : MonoBehaviour
     // ── Interaction ───────────────────────────────────────────────────────────
     private void ShowClue()
     {
+        if (!_opened)
+            PuzzleManager.ReportDecoyInteraction("decoy_note", this);
         _opened = true;
         _cluePanel.SetActive(true);
         ResetPanelCanvasGroup();

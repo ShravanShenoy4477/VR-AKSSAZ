@@ -65,6 +65,8 @@ public class DecoyGramophoneCD : MonoBehaviour
     private Transform  _promptRoot;
     private bool       _triggered  = false;
     private bool       _prevGrip   = false;
+    private bool       _prevGripL  = false;
+    private bool       _reportedDecoy;
     private Coroutine  _spinRoutine;
     private bool       _fading;
     private float      _nearCloseAccum;
@@ -74,6 +76,8 @@ public class DecoyGramophoneCD : MonoBehaviour
     [SerializeField] float panelFadeOutSeconds = 0.55f;
     [SerializeField] float nearCloseDismissHoldSeconds = 0.72f;
     [SerializeField] float nearCloseBoundsExpand = 0.12f;
+    [SerializeField] float lockedPulseAmplitude = 0.16f;
+    [SerializeField] float lockedPulseDuration = 0.03f;
 
     // ── Awake ─────────────────────────────────────────────────────────────────
     void Awake()
@@ -121,18 +125,18 @@ public class DecoyGramophoneCD : MonoBehaviour
     // ── Update ────────────────────────────────────────────────────────────────
     void Update()
     {
+        bool unlocked = PuzzleManager.IsDecoyPathUnlocked("gramophone");
         if (_cluePanel != null && _cluePanel.activeSelf)
             UpdateNearCloseDismiss();
 
-        if (m_Zone == null || m_RightController == null) return;
+        if (m_Zone == null || (m_RightController == null && m_LeftController == null)) return;
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid) return;
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip)) return;
-
-        bool pressedEdge = grip && !_prevGrip;
-        _prevGrip = grip;
-        bool inZone = IsInsideZone(m_Zone, m_RightController.position);
+        bool edgeR = ReadInteractEdge(XRNode.RightHand, ref _prevGrip);
+        bool edgeL = ReadInteractEdge(XRNode.LeftHand, ref _prevGripL);
+        bool inZoneR = m_RightController != null && IsInsideZone(m_Zone, m_RightController.position);
+        bool inZoneL = m_LeftController != null && IsInsideZone(m_Zone, m_LeftController.position);
+        bool inZone = inZoneR || inZoneL;
+        bool pressedEdge = (edgeR && inZoneR) || (edgeL && inZoneL);
 
         // Show / hide SPIN prompt based on proximity
         if (_promptRoot != null && !_triggered)
@@ -142,6 +146,22 @@ public class DecoyGramophoneCD : MonoBehaviour
         }
 
         if (!pressedEdge || !inZone) return;
+        if (!unlocked)
+        {
+            InteractableHapticFeedback.ShowWrongOrderCue(transform);
+            if (edgeR && inZoneR)
+            {
+                XrHaptics.PulseRight(lockedPulseAmplitude, lockedPulseDuration);
+            }
+            if (edgeL && inZoneL)
+            {
+                XrHaptics.PulseLeft(lockedPulseAmplitude, lockedPulseDuration);
+            }
+            if (_spinRoutine != null) StopCoroutine(_spinRoutine);
+            _spinRoutine = StartCoroutine(SpinOnlyPreview());
+            return;
+        }
+        InteractableHapticFeedback.ShowTargetFlashCue(transform, true);
         if (_triggered)
         {
             if (_cluePanel == null || !_cluePanel.activeSelf)
@@ -151,6 +171,30 @@ public class DecoyGramophoneCD : MonoBehaviour
 
         if (_spinRoutine != null) StopCoroutine(_spinRoutine);
         _spinRoutine = StartCoroutine(SpinAndReveal());
+    }
+
+    bool ReadInteractEdge(XRNode node, ref bool prev)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(node);
+        if (!device.isValid)
+        {
+            prev = false;
+            return false;
+        }
+        bool grip = false;
+        bool trigger = false;
+        device.TryGetFeatureValue(CommonUsages.gripButton, out grip);
+        device.TryGetFeatureValue(CommonUsages.triggerButton, out trigger);
+        bool pressed = grip || trigger;
+        if (!grip && !trigger)
+        {
+            prev = false;
+            return false;
+        }
+
+        bool edge = pressed && !prev;
+        prev = pressed;
+        return edge;
     }
 
     void UpdateNearCloseDismiss()
@@ -229,9 +273,33 @@ public class DecoyGramophoneCD : MonoBehaviour
         ShowClue();
     }
 
+    IEnumerator SpinOnlyPreview()
+    {
+        float elapsed = 0f;
+        float totalAngle = Mathf.Max(1f, m_SpinRotations) * 180f;
+        Quaternion startRot = m_CDDisc.localRotation;
+
+        while (elapsed < m_SpinDuration * 0.8f)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / (m_SpinDuration * 0.8f));
+            float smooth = m_SpinEase.Evaluate(t);
+            m_CDDisc.localRotation = startRot * Quaternion.AngleAxis(smooth * totalAngle, Vector3.up);
+            yield return null;
+        }
+
+        m_CDDisc.localRotation = startRot * Quaternion.AngleAxis(totalAngle % 360f, Vector3.up);
+        _spinRoutine = null;
+    }
+
     // ── Clue popup ────────────────────────────────────────────────────────────
     void ShowClue()
     {
+        if (!_reportedDecoy)
+        {
+            PuzzleManager.ReportDecoyInteraction("decoy_gramophone_cd", this);
+            _reportedDecoy = true;
+        }
         _cluePanel.SetActive(true);
         ResetPanelCanvasGroup();
         StartCoroutine(FadeInPanelCoroutine());

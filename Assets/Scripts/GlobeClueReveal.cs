@@ -69,6 +69,7 @@ public class GlobeClueReveal : MonoBehaviour
     private bool       _triggered = false;
     private bool       _progressSent;
     private bool       _prevGrip  = false;
+    private bool       _prevGripL = false;
     private Coroutine  _spinRoutine;
     private bool       _fading;
     private float      _nearCloseAccum;
@@ -125,27 +126,27 @@ public class GlobeClueReveal : MonoBehaviour
     // ── Update ────────────────────────────────────────────────────────────────
     void Update()
     {
+        bool unlocked = PuzzleManager.IsClueUnlocked(clueIndex);
         if (_cluePanel != null && _cluePanel.activeSelf)
             UpdateNearCloseDismiss();
 
-        if (m_Zone == null || m_RightController == null) return;
+        if (m_Zone == null || (m_RightController == null && m_LeftController == null)) return;
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid) return;
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip)) return;
-
-        bool pressedEdge = grip && !_prevGrip;
-        _prevGrip = grip;
-        bool inZone = IsInsideZone(m_Zone, m_RightController.position);
+        bool edgeR = ReadGripEdge(XRNode.RightHand, ref _prevGrip);
+        bool edgeL = ReadGripEdge(XRNode.LeftHand, ref _prevGripL);
+        bool inZoneR = m_RightController != null && IsInsideZone(m_Zone, m_RightController.position);
+        bool inZoneL = m_LeftController != null && IsInsideZone(m_Zone, m_LeftController.position);
+        bool inZone = inZoneR || inZoneL;
+        bool pressedEdge = (edgeR && inZoneR) || (edgeL && inZoneL);
 
         // Show / hide SPIN prompt based on proximity
         if (_promptRoot != null && !_triggered)
         {
             bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
-            _promptRoot.gameObject.SetActive(inZone && !panelOpen);
+            _promptRoot.gameObject.SetActive(unlocked && inZone && !panelOpen);
         }
 
-        if (!pressedEdge || !inZone) return;
+        if (!unlocked || !pressedEdge || !inZone) return;
         if (_triggered)
         {
             if (_progressSent && (_cluePanel == null || !_cluePanel.activeSelf))
@@ -155,6 +156,25 @@ public class GlobeClueReveal : MonoBehaviour
 
         if (_spinRoutine != null) StopCoroutine(_spinRoutine);
         _spinRoutine = StartCoroutine(SpinAndReveal());
+    }
+
+    bool ReadGripEdge(XRNode node, ref bool prev)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(node);
+        if (!device.isValid)
+        {
+            prev = false;
+            return false;
+        }
+        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip))
+        {
+            prev = false;
+            return false;
+        }
+
+        bool edge = grip && !prev;
+        prev = grip;
+        return edge;
     }
 
     void UpdateNearCloseDismiss()

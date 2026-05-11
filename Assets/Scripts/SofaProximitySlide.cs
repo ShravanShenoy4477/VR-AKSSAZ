@@ -69,6 +69,9 @@ public class SofaProximitySlide : MonoBehaviour
     [Tooltip("Logs grip edges, in-zone checks, and slide triggers.")]
     [SerializeField] bool m_DebugLogs;
     [SerializeField] float m_DebugLogInterval = 0.35f;
+    [Header("Out-of-turn feedback")]
+    [SerializeField] float m_LockedPulseAmplitude = 0.16f;
+    [SerializeField] float m_LockedPulseDuration = 0.03f;
 
     // ── Runtime ───────────────────────────────────────────────────────────────
     Vector3   m_ClosedPosition;
@@ -77,6 +80,8 @@ public class SofaProximitySlide : MonoBehaviour
     bool      m_IsAnimating;
     bool      m_PrevGripR;
     bool      m_PrevGripL;
+    bool      m_PrevAltGripR;
+    bool      m_PrevAltGripL;
     Coroutine m_Routine;
     float     m_NextDebugLogAt;
     readonly Collider[] m_NearbyColliders = new Collider[24];
@@ -263,6 +268,8 @@ public class SofaProximitySlide : MonoBehaviour
 
         bool edgeR = ReadSelectEdge(XRNode.RightHand, ref m_PrevGripR);
         bool edgeL = ReadSelectEdge(XRNode.LeftHand, ref m_PrevGripL);
+        bool gripEdgeR = ReadGripEdge(XRNode.RightHand, ref m_PrevAltGripR);
+        bool gripEdgeL = ReadGripEdge(XRNode.LeftHand, ref m_PrevAltGripL);
 
         bool inR = m_RightController != null && IsInsideZoneWithTolerance(m_Zone, m_RightController.position, m_ZoneDistanceTolerance);
         bool inL = m_LeftController != null && IsInsideZoneWithTolerance(m_Zone, m_LeftController.position, m_ZoneDistanceTolerance);
@@ -270,6 +277,28 @@ public class SofaProximitySlide : MonoBehaviour
         bool nearSofaL = m_LeftController != null && Vector3.Distance(m_LeftController.position, transform.position) <= m_MaxHandDistanceFromSofa;
         bool blockR = m_BlockSlideWhenHandNearGrabbable && IsHandNearOtherGrabbable(m_RightController);
         bool blockL = m_BlockSlideWhenHandNearGrabbable && IsHandNearOtherGrabbable(m_LeftController);
+
+        if (!PuzzleManager.CanUseSofa())
+        {
+            bool lockedTryR = (edgeR || gripEdgeR) && inR && nearSofaR;
+            bool lockedTryL = (edgeL || gripEdgeL) && inL && nearSofaL;
+            if (lockedTryR)
+            {
+                XrHaptics.PulseRight(m_LockedPulseAmplitude, m_LockedPulseDuration);
+                InteractableHapticFeedback.ShowWrongOrderCue(transform);
+            }
+            if (lockedTryL)
+            {
+                XrHaptics.PulseLeft(m_LockedPulseAmplitude, m_LockedPulseDuration);
+                InteractableHapticFeedback.ShowWrongOrderCue(transform);
+            }
+            if ((lockedTryR || lockedTryL) && !m_IsAnimating)
+            {
+                if (m_Routine != null) StopCoroutine(m_Routine);
+                m_Routine = StartCoroutine(AnimateSlide(!m_IsOpen));
+            }
+            return;
+        }
 
         if (m_DebugLogs && Time.time >= m_NextDebugLogAt && (inR || inL || edgeR || edgeL))
         {
@@ -342,6 +371,26 @@ public class SofaProximitySlide : MonoBehaviour
             pressed = triggerAxis >= m_SelectAxisPressedThreshold;
         }
         else
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        bool edge = pressed && !prevPressed;
+        prevPressed = pressed;
+        return edge;
+    }
+
+    bool ReadGripEdge(XRNode node, ref bool prevPressed)
+    {
+        var dev = InputDevices.GetDeviceAtXRNode(node);
+        if (!dev.isValid)
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        if (!dev.TryGetFeatureValue(CommonUsages.gripButton, out bool pressed))
         {
             prevPressed = false;
             return false;

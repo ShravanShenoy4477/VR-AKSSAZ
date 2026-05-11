@@ -47,15 +47,16 @@ public class PuzzleManager : MonoBehaviour
     [Header("Door guidance (on key pickup)")]
     [SerializeField] bool enableDoorGuidanceOnKeyPickup = true;
     [SerializeField] Color doorGuideColor = new Color(1f, 0.88f, 0.45f, 1f);
-    [SerializeField] float doorGuideSpotIntensity = 2.6f;
+    [SerializeField] float doorGuideSpotIntensity = 0.45f;
     [SerializeField] float doorGuideSpotRange = 4.6f;
     [SerializeField] float doorGuideSpotAngle = 34f;
-    [SerializeField] Vector3 doorGuideSpotOffset = new Vector3(0f, 0.12f, 0.10f);
+    [SerializeField] Vector3 doorGuideSpotOffset = new Vector3(-0.06f, -0.06f, 0f);
     [SerializeField] float doorGuideHingeFillIntensity = 1.1f;
-    [SerializeField] float doorGuideHingePulseIntensity = 2.2f;
-    [SerializeField] float doorGuideHingePulseRange = 1.8f;
+    [SerializeField] Vector3 doorGuideFillOffset = new Vector3(-0.05f, 0.02f, 0f);
+    [SerializeField] float doorGuideHingePulseIntensity = 3.0f;
+    [SerializeField] float doorGuideHingePulseRange = 1.4f;
     [SerializeField] float doorGuideHingePulseAngle = 28f;
-    [SerializeField] Vector3 doorGuideHingePulseOffset = new Vector3(0f, 0f, 0f);
+    [SerializeField] Vector3 doorGuideHingePulseOffset = new Vector3(-0.09f, -0.10f, 0f);
     [SerializeField] float doorGuidePulseSpeed = 3.8f;
     [SerializeField] float doorGuidePulseAmount = 0.25f;
     [Header("Key spotlight fallback")]
@@ -78,6 +79,7 @@ public class PuzzleManager : MonoBehaviour
 
     /// <summary>Number of unique required clues solved so far.</summary>
     public static int SolvedClueCount => _instance != null ? _instance._solvedClues.Count : 0;
+    public static int DecoyInteractionCount => _instance != null ? _instance._decoyInteractions : 0;
 
     // ── Colours ───────────────────────────────────────────────────────────────
     static readonly Color BgDark      = new Color(0.07f, 0.08f, 0.13f, 0.95f);
@@ -90,6 +92,9 @@ public class PuzzleManager : MonoBehaviour
     private static PuzzleManager _instance;
 
     private readonly HashSet<int> _solvedClues = new HashSet<int>();
+    private readonly HashSet<string> _seenDecoyIds = new HashSet<string>();
+    private int _decoyInteractions;
+    private bool _decoyGramophoneUnlocked;
     private bool       _puzzleComplete = false;
 
     // Notification HUD
@@ -107,6 +112,7 @@ public class PuzzleManager : MonoBehaviour
     private Vector3 _doorGuideTargetWorld;
     private bool _hasDoorGuideTarget;
     private bool _doorGuidanceActive;
+    private float _nextOutOfTurnToastTime;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     void Awake()
@@ -146,6 +152,9 @@ public class PuzzleManager : MonoBehaviour
     void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         _solvedClues.Clear();
+        _seenDecoyIds.Clear();
+        _decoyInteractions = 0;
+        _decoyGramophoneUnlocked = false;
         _puzzleComplete = false;
         if (_notifPanel != null) _notifPanel.SetActive(false);
 
@@ -171,6 +180,63 @@ public class PuzzleManager : MonoBehaviour
         return _instance.HandleClueSolved(clueIndex, source);
     }
 
+    public static bool IsClueUnlocked(int clueIndex)
+    {
+        if (_instance == null) return true;
+        return clueIndex switch
+        {
+            <= 1 => true,
+            2 => _instance._solvedClues.Contains(1),
+            3 => _instance._solvedClues.Contains(1) && _instance._solvedClues.Contains(2),
+            _ => true
+        };
+    }
+
+    public static bool CanUseSofa()
+    {
+        return IsClueUnlocked(2);
+    }
+
+    public static bool IsDecoyPathUnlocked(string pathId)
+    {
+        if (_instance == null || string.IsNullOrEmpty(pathId)) return true;
+        return pathId switch
+        {
+            "gramophone" => _instance._decoyGramophoneUnlocked,
+            _ => true
+        };
+    }
+
+    public static void ReportDecoyInteraction(string decoyId, Object source = null)
+    {
+        if (_instance == null || string.IsNullOrEmpty(decoyId)) return;
+        _instance.HandleDecoyInteraction(decoyId, source);
+    }
+
+    public static void ShowOutOfTurnFeedback(string bodyText)
+    {
+        if (_instance == null || string.IsNullOrEmpty(bodyText)) return;
+        _instance.ShowOutOfTurnFeedbackInternal(bodyText);
+    }
+
+    void ShowOutOfTurnFeedbackInternal(string bodyText)
+    {
+        if (Time.unscaledTime < _nextOutOfTurnToastTime) return;
+        _nextOutOfTurnToastTime = Time.unscaledTime + 1.2f;
+        ShowNotification("NOT YET", bodyText, AccentBlue, autoDismissSeconds: 1.8f);
+    }
+
+    void HandleDecoyInteraction(string decoyId, Object source)
+    {
+        if (!_seenDecoyIds.Add(decoyId)) return;
+        _decoyInteractions++;
+
+        if (decoyId == "decoy_note")
+            _decoyGramophoneUnlocked = true;
+
+        Debug.Log($"[PuzzleManager] Decoy hit '{decoyId}' from '{(source != null ? source.name : "unknown")}'.");
+    }
+
     IEnumerator HideKeyNextFrame()
     {
         yield return null;
@@ -182,16 +248,26 @@ public class PuzzleManager : MonoBehaviour
     /// <summary>Only clue 1 is available at start; clue 2 after 1 solved; clue 3 after 2 solved.</summary>
     void RefreshSequentialClueProps()
     {
+        bool clue1Solved = _solvedClues.Contains(1);
+        bool clue2Solved = _solvedClues.Contains(2);
+
+        // Real clue visibility is strictly sequential.
+        foreach (var c in Object.FindObjectsByType<ClueNote>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (c.clueIndex == 1)
+                c.gameObject.SetActive(true);
+        }
+
         foreach (var p in Object.FindObjectsByType<ProximityClueNote>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
             if (p.clueIndex == 2)
-                p.gameObject.SetActive(_solvedClues.Contains(1));
+                p.gameObject.SetActive(clue1Solved);
         }
 
         foreach (var g in Object.FindObjectsByType<GlobeClueReveal>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
             if (g.clueIndex == 3)
-                g.gameObject.SetActive(_solvedClues.Contains(1) && _solvedClues.Contains(2));
+                g.gameObject.SetActive(clue1Solved && clue2Solved);
         }
     }
 
@@ -345,7 +421,9 @@ public class PuzzleManager : MonoBehaviour
         _doorGuideSpot.range = doorGuideSpotRange;
         _doorGuideSpot.spotAngle = doorGuideSpotAngle;
         _doorGuideSpot.transform.position = _doorGuideTargetWorld + doorGuideSpotOffset;
-        _doorGuideSpot.transform.rotation = Quaternion.LookRotation((_doorGuideTargetWorld - _doorGuideSpot.transform.position).normalized, Vector3.up);
+        Vector3 toTarget = _doorGuideTargetWorld - _doorGuideSpot.transform.position;
+        if (toTarget.sqrMagnitude > 0.0001f)
+            _doorGuideSpot.transform.rotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
         _doorGuideSpot.enabled = true;
 
         if (_doorGuideHingeFill == null)
@@ -359,7 +437,7 @@ public class PuzzleManager : MonoBehaviour
         _doorGuideHingeFill.color = doorGuideColor;
         _doorGuideHingeFill.range = 1.25f;
         _doorGuideHingeFill.intensity = doorGuideHingeFillIntensity;
-        _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + new Vector3(0f, 0.10f, 0f);
+        _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + doorGuideFillOffset;
         _doorGuideHingeFill.enabled = true;
 
         if (_doorGuideHingePulseSpot == null)
@@ -566,18 +644,18 @@ public class PuzzleManager : MonoBehaviour
         if (_doorGuideSpot != null)
         {
             _doorGuideSpot.transform.position = _doorGuideTargetWorld + doorGuideSpotOffset;
-            _doorGuideSpot.transform.rotation =
-                Quaternion.LookRotation((_doorGuideTargetWorld - _doorGuideSpot.transform.position).normalized, Vector3.up);
+            Vector3 toTarget = _doorGuideTargetWorld - _doorGuideSpot.transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+                _doorGuideSpot.transform.rotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
         }
         if (_doorGuideHingeFill != null)
-            _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + new Vector3(0f, 0.10f, 0f);
+            _doorGuideHingeFill.transform.position = _doorGuideTargetWorld + doorGuideFillOffset;
         if (_doorGuideHingePulseSpot != null)
             _doorGuideHingePulseSpot.transform.position = _doorGuideTargetWorld + doorGuideHingePulseOffset;
 
         if (_doorGuideSpot != null && _doorGuideSpot.enabled)
         {
-            float pulse = 1f + Mathf.Sin(Time.time * doorGuidePulseSpeed) * doorGuidePulseAmount;
-            _doorGuideSpot.intensity = doorGuideSpotIntensity * pulse;
+            _doorGuideSpot.intensity = doorGuideSpotIntensity;
         }
         if (_doorGuideHingeFill != null && _doorGuideHingeFill.enabled)
         {

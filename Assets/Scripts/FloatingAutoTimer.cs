@@ -95,7 +95,7 @@ public class FloatingAutoTimer : MonoBehaviour
         if (hintDisplayText != null)
         {
             hintDisplayText.text =
-                "Hints: <b>grip</b> inside Hint 1 / Hint 2, or use the laser + trigger. Press <b>left Y</b> to show or hide this HUD (H in Editor).";
+                "Hints: use sparingly. They may narrow location but can still lead through decoys.\nUse <b>grip</b> inside Hint 1 / Hint 2, or laser + trigger. Press <b>left Y</b> to show or hide this HUD (H in Editor).";
             hintDisplayText.color = MenuThemes.Hud.TextSecondary;
         }
 
@@ -271,7 +271,7 @@ public class FloatingAutoTimer : MonoBehaviour
         hintBody.transform.SetParent(menuPanel.transform, false);
         hintDisplayText = hintBody.AddComponent<TextMeshProUGUI>();
         hintDisplayText.text =
-            "Hints: move a controller into a hint row and <b>squeeze grip</b> briefly, or use the laser + trigger.\nPress <b>left Y</b> to show or hide this HUD (H in Editor). When shown, this HUD stays where you opened it.";
+            "Hints are directional, not exact. They can move you forward or through a convincing decoy.\nUse <b>grip</b> in a hint row, or laser + trigger.\nPress <b>left Y</b> to show/hide this HUD (H in Editor).";
         hintDisplayText.fontSize  = 0.026f;
         hintDisplayText.alignment = TextAlignmentOptions.Center;
         hintDisplayText.color     = MenuThemes.Hud.TextSecondary;
@@ -289,7 +289,7 @@ public class FloatingAutoTimer : MonoBehaviour
         if (!hint1Button.interactable) return;
         _hintsUsed++;
         hintDisplayText.text =
-            "Start near the seating: pick up the book you can grab. After clue 1, touch anywhere on the big sofa with a hand and press grip once to slide it sideways and reach the next book.";
+            "Start in the seating zone. A readable lead is there, but a similar-looking path can pull you toward music props. Follow what stays consistent after you test it.";
         hintDisplayText.color = Color.white;
         hint1Button.interactable = false;
         hint2Button.interactable = true;
@@ -303,8 +303,16 @@ public class FloatingAutoTimer : MonoBehaviour
     {
         if (!hint2Button.interactable) return;
         _hintsUsed++;
-        hintDisplayText.text =
-            "Later: search around the larger couches, then the corner globe. Keys unlock the door when you bring them to the knob area.";
+        if (PuzzleManager.DecoyInteractionCount == 0)
+        {
+            hintDisplayText.text =
+                "After the seating clues, investigate the corner and any mechanism that seems to respond to your hand. One route is persuasive but not essential.";
+        }
+        else
+        {
+            hintDisplayText.text =
+                "If you've hit a dead end, reset to the core chain: seating clues -> corner globe -> clock reveal -> key to the door knob trigger.";
+        }
         hint2Button.interactable = false;
         XrHaptics.PulseRight(0.45f, 0.06f);
     }

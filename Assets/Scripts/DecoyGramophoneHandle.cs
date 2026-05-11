@@ -71,6 +71,8 @@ public class DecoyGramophoneHandle : MonoBehaviour
     private Transform  _promptRoot;
     private bool       _triggered  = false;
     private bool       _prevGrip   = false;
+    private bool       _prevGripL  = false;
+    private bool       _reportedDecoy;
     private Coroutine  _crankRoutine;
     private bool       _fading;
     private float      _nearCloseAccum;
@@ -80,6 +82,8 @@ public class DecoyGramophoneHandle : MonoBehaviour
     [SerializeField] float panelFadeOutSeconds = 0.55f;
     [SerializeField] float nearCloseDismissHoldSeconds = 0.72f;
     [SerializeField] float nearCloseBoundsExpand = 0.12f;
+    [SerializeField] float lockedPulseAmplitude = 0.16f;
+    [SerializeField] float lockedPulseDuration = 0.03f;
 
     // ── Awake ─────────────────────────────────────────────────────────────────
     void Awake()
@@ -114,9 +118,10 @@ public class DecoyGramophoneHandle : MonoBehaviour
     // ── Update ────────────────────────────────────────────────────────────────
     void Update()
     {
+        bool unlocked = PuzzleManager.IsDecoyPathUnlocked("gramophone");
         if (_cluePanel != null && _cluePanel.activeSelf)
             UpdateNearCloseDismiss();
-        if (Camera.main == null || m_RightController == null) return;
+        if (Camera.main == null || (m_RightController == null && m_LeftController == null)) return;
 
         bool panelOpen = _cluePanel != null && _cluePanel.activeSelf;
 
@@ -127,18 +132,31 @@ public class DecoyGramophoneHandle : MonoBehaviour
             _promptRoot.gameObject.SetActive(camDist < proximityRadius && !panelOpen);
         }
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid) return;
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip)) return;
+        bool edgeR = ReadInteractEdge(XRNode.RightHand, ref _prevGrip);
+        bool edgeL = ReadInteractEdge(XRNode.LeftHand, ref _prevGripL);
+        if (panelOpen) return;
 
-        bool pressedEdge = grip && !_prevGrip;
-        _prevGrip = grip;
+        bool nearR = m_RightController != null && Vector3.Distance(m_RightController.position, transform.position) <= interactRadius;
+        bool nearL = m_LeftController != null && Vector3.Distance(m_LeftController.position, transform.position) <= interactRadius;
+        bool pressedNear = (edgeR && nearR) || (edgeL && nearL);
+        if (!pressedNear) return;
+        if (!unlocked)
+        {
+            InteractableHapticFeedback.ShowWrongOrderCue(transform);
+            if (edgeR && nearR)
+            {
+                XrHaptics.PulseRight(lockedPulseAmplitude, lockedPulseDuration);
+            }
+            if (edgeL && nearL)
+            {
+                XrHaptics.PulseLeft(lockedPulseAmplitude, lockedPulseDuration);
+            }
+            if (_crankRoutine != null) StopCoroutine(_crankRoutine);
+            _crankRoutine = StartCoroutine(CrankOnlyPreview());
+            return;
+        }
 
-        if (panelOpen || !pressedEdge) return;
-
-        float handDist = Vector3.Distance(m_RightController.position, transform.position);
-        if (handDist > interactRadius) return;
-
+        InteractableHapticFeedback.ShowTargetFlashCue(transform, true);
         if (_triggered)
         {
             ShowClue();
@@ -147,6 +165,30 @@ public class DecoyGramophoneHandle : MonoBehaviour
 
         if (_crankRoutine != null) StopCoroutine(_crankRoutine);
         _crankRoutine = StartCoroutine(CrankAndReveal());
+    }
+
+    bool ReadInteractEdge(XRNode node, ref bool prev)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(node);
+        if (!device.isValid)
+        {
+            prev = false;
+            return false;
+        }
+        bool grip = false;
+        bool trigger = false;
+        device.TryGetFeatureValue(CommonUsages.gripButton, out grip);
+        device.TryGetFeatureValue(CommonUsages.triggerButton, out trigger);
+        bool pressed = grip || trigger;
+        if (!grip && !trigger)
+        {
+            prev = false;
+            return false;
+        }
+
+        bool edge = pressed && !prev;
+        prev = pressed;
+        return edge;
     }
 
     void UpdateNearCloseDismiss()
@@ -223,9 +265,34 @@ public class DecoyGramophoneHandle : MonoBehaviour
         ShowClue();
     }
 
+    IEnumerator CrankOnlyPreview()
+    {
+        float elapsed = 0f;
+        float totalAngle = Mathf.Max(1f, m_CrankRotations) * 180f;
+        Quaternion startRot = m_Handle.localRotation;
+        Vector3 axis = m_CrankAxis.normalized;
+
+        while (elapsed < m_CrankDuration * 0.8f)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / (m_CrankDuration * 0.8f));
+            float smooth = m_CrankEase.Evaluate(t);
+            m_Handle.localRotation = startRot * Quaternion.AngleAxis(smooth * totalAngle, axis);
+            yield return null;
+        }
+
+        m_Handle.localRotation = startRot * Quaternion.AngleAxis(totalAngle % 360f, axis);
+        _crankRoutine = null;
+    }
+
     // ── Clue popup ────────────────────────────────────────────────────────────
     void ShowClue()
     {
+        if (!_reportedDecoy)
+        {
+            PuzzleManager.ReportDecoyInteraction("decoy_gramophone_handle", this);
+            _reportedDecoy = true;
+        }
         _cluePanel.SetActive(true);
         ResetPanelCanvasGroup();
         StartCoroutine(FadeInPanelCoroutine());
