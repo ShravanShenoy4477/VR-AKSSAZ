@@ -1,10 +1,11 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.XR;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
-/// Tilts the clock when the right controller is inside the zone collider and the grip
-/// (side button) is pressed. Toggle each time. No XR Grab / InputAction assets required.
+/// Tilts the clock when the right controller is inside the zone collider and the select
+/// (trigger button) is pressed. Toggle each time. No XR Grab / InputAction assets required.
 /// </summary>
 [DisallowMultipleComponent]
 public class ClockProximityTilt : MonoBehaviour
@@ -29,6 +30,9 @@ public class ClockProximityTilt : MonoBehaviour
     [Tooltip("Optional. If unset, uses GameObject named RightHandController.")]
     [SerializeField]
     Transform m_RightController;
+    [Tooltip("Optional. If unset, uses GameObject named LeftHandController.")]
+    [SerializeField]
+    Transform m_LeftController;
 
     [Header("Tilt")]
     [SerializeField]
@@ -46,13 +50,33 @@ public class ClockProximityTilt : MonoBehaviour
     [SerializeField]
     AnimationCurve m_Ease = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
 
+    [Header("Key reveal (after clue 3)")]
+    [SerializeField] bool m_EnableKeyReveal = true;
+    [Tooltip("Optional explicit key object. If empty, auto-uses PuzzleManager.keyObject.")]
+    [SerializeField] GameObject m_KeyObject;
+    [Tooltip("Position of key relative to clock center when clock is in CLOSED pose.")]
+    [SerializeField] Vector3 m_KeyRevealClosedLocalOffset = new Vector3(0f, 0.00f, -0.06f);
+    [SerializeField] Vector3 m_KeyRevealLocalEuler = new Vector3(0f, 0f, 0f);
+    [SerializeField] Color m_KeySpotColor = new Color(1f, 0.93f, 0.82f, 1f);
+    [SerializeField] float m_KeySpotIntensity = 2.4f;
+    [SerializeField] float m_KeySpotRange = 1.4f;
+    [SerializeField] float m_KeySpotAngle = 38f;
+    [Tooltip("Spotlight position relative to clock center in CLOSED pose (up + right bias).")]
+    [SerializeField] Vector3 m_KeySpotClosedLocalOffset = new Vector3(0.14f, 0.20f, 0.16f);
+    [SerializeField] bool m_ForceEnableKeyRenderersOnReveal = true;
+
     Quaternion m_ClosedLocalRotation;
     bool m_IsTilted;
     bool m_IsAnimating;
-    bool m_PrevGrip;
+    bool m_PrevSelectR;
+    bool m_PrevSelectL;
     Coroutine m_AnimateRoutine;
     float m_NextHeartbeatTime;
     bool m_LoggedMissingController;
+    Light m_KeySpot;
+    bool m_KeyRevealedFromClock;
+    Vector3 m_KeyRevealWorldAnchor;
+    Vector3 m_KeySpotWorldAnchor;
 
     void Awake()
     {
@@ -77,6 +101,8 @@ public class ClockProximityTilt : MonoBehaviour
             m_HingePivot = transform;
 
         m_ClosedLocalRotation = m_HingePivot.localRotation;
+        m_KeyRevealWorldAnchor = transform.TransformPoint(m_KeyRevealClosedLocalOffset);
+        m_KeySpotWorldAnchor = transform.TransformPoint(m_KeySpotClosedLocalOffset);
 
         if (m_Ease == null || m_Ease.length == 0)
             m_Ease = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
@@ -95,6 +121,20 @@ public class ClockProximityTilt : MonoBehaviour
         else
             Log($"Awake: Right Controller assigned: '{m_RightController.name}'");
 
+        if (m_KeyObject == null)
+        {
+            var pm = FindFirstObjectByType<PuzzleManager>();
+            if (pm != null)
+                m_KeyObject = pm.keyObject;
+        }
+
+        if (m_LeftController == null)
+        {
+            var go = GameObject.Find("LeftHandController");
+            if (go != null)
+                m_LeftController = go.transform;
+        }
+
         Log($"Awake: zone bounds (world) {m_Zone.bounds}, hinge='{m_HingePivot.name}' tiltDeg={m_TiltDegrees}");
     }
 
@@ -103,53 +143,63 @@ public class ClockProximityTilt : MonoBehaviour
         if (m_IsAnimating || m_Zone == null)
             return;
 
-        if (m_RightController == null)
+        if (m_RightController == null && m_LeftController == null)
         {
             if (!m_LoggedMissingController)
             {
                 m_LoggedMissingController = true;
-                LogWarning("Update: m_RightController is null — assign Right Controller or add an object named RightHandController.");
+                LogWarning("Update: controller references are null — assign hand controllers in Inspector.");
             }
             return;
         }
 
-        var device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
-        if (!device.isValid)
+        bool edgeR = ReadSelectEdge(XRNode.RightHand, ref m_PrevSelectR);
+        bool edgeL = ReadSelectEdge(XRNode.LeftHand, ref m_PrevSelectL);
+        bool inR = m_RightController != null && IsInsideZone(m_Zone, m_RightController.position);
+        bool inL = m_LeftController != null && IsInsideZone(m_Zone, m_LeftController.position);
+
+        if (!(inR || inL))
         {
-            HeartbeatMaybe(() => "XR RightHand device invalid (not tracking / not ready).");
-            return;
+            HeartbeatMaybe(() => "No hand in zone.");
         }
 
-        if (!device.TryGetFeatureValue(CommonUsages.gripButton, out bool grip))
-        {
-            HeartbeatMaybe(() => "TryGetFeatureValue(gripButton) failed.");
-            return;
-        }
-
-        bool pressedEdge = grip && !m_PrevGrip;
-        m_PrevGrip = grip;
-
-        Vector3 handPos = m_RightController.position;
-        bool inside = IsInsideZone(m_Zone, handPos);
-
-        HeartbeatMaybe(() =>
-            $"hand='{m_RightController.name}' pos={handPos} inside={inside} grip={grip} tilted={m_IsTilted} device={device.name}");
-
+        bool pressedEdge = (edgeR && inR) || (edgeL && inL);
         if (!pressedEdge)
             return;
 
-        if (!inside)
-        {
-            Vector3 closest = m_Zone.ClosestPoint(handPos);
-            float d2 = (closest - handPos).sqrMagnitude;
-            Log($"Grip edge IGNORED: outside zone. handPos={handPos} closest={closest} distSqr={d2:E3} (need ~0 inside)");
-            return;
-        }
+        bool puzzleReadyForClockReveal = PuzzleManager.SolvedClueCount >= 3;
+        if (!puzzleReadyForClockReveal)
+            InteractableHapticFeedback.ShowWrongOrderCue(transform);
 
-        Log($"Grip edge ACCEPTED: toggling tilt -> {!m_IsTilted}");
+        Log($"Select edge ACCEPTED: toggling tilt -> {!m_IsTilted}");
         if (m_AnimateRoutine != null)
             StopCoroutine(m_AnimateRoutine);
         m_AnimateRoutine = StartCoroutine(AnimateToTilted(!m_IsTilted));
+    }
+
+    bool ReadSelectEdge(XRNode hand, ref bool prevPressed)
+    {
+        var device = InputDevices.GetDeviceAtXRNode(hand);
+        if (!device.isValid)
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        if (!device.TryGetFeatureValue(CommonUsages.triggerButton, out bool selectPressed))
+        {
+            prevPressed = false;
+            return false;
+        }
+
+        bool edge = selectPressed && !prevPressed;
+        prevPressed = selectPressed;
+        return edge;
+    }
+
+    public void ConfigureAsNonKeyClock()
+    {
+        m_EnableKeyReveal = false;
     }
 
     void HeartbeatMaybe(System.Func<string> message)
@@ -191,6 +241,11 @@ public class ClockProximityTilt : MonoBehaviour
         m_IsAnimating = false;
         m_AnimateRoutine = null;
         Log($"AnimateToTilted done. m_IsTilted={m_IsTilted}");
+
+        if (m_IsTilted)
+            TryRevealKeyBehindClock();
+        else
+            SetKeySpotlightEnabled(false);
     }
 
     void ApplyTiltT(float t)
@@ -207,5 +262,86 @@ public class ClockProximityTilt : MonoBehaviour
     void LogWarning(string msg)
     {
         Debug.LogWarning($"{m_DebugLogTag}: {msg}");
+    }
+
+    void TryRevealKeyBehindClock()
+    {
+        if (!m_EnableKeyReveal)
+            return;
+        if (PuzzleManager.SolvedClueCount < 3)
+            return;
+        if (m_KeyObject == null)
+        {
+            var pm = FindFirstObjectByType<PuzzleManager>();
+            if (pm != null)
+                m_KeyObject = pm.keyObject;
+        }
+        if (m_KeyObject == null)
+        {
+            var grabs = FindObjectsByType<XRGrabInteractable>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var grab in grabs)
+            {
+                if (grab != null && grab.name.ToLowerInvariant().Contains("key"))
+                {
+                    m_KeyObject = grab.gameObject;
+                    break;
+                }
+            }
+        }
+        if (m_KeyObject == null)
+        {
+            LogWarning("TryRevealKeyBehindClock: key object not found.");
+            return;
+        }
+
+        var keyTx = m_KeyObject.transform;
+        keyTx.SetParent(null, true);
+        keyTx.position = m_KeyRevealWorldAnchor;
+        keyTx.rotation = Quaternion.Euler(m_KeyRevealLocalEuler);
+        m_KeyObject.SetActive(true);
+        if (m_ForceEnableKeyRenderersOnReveal)
+        {
+            var renderers = m_KeyObject.GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in renderers)
+                renderer.enabled = true;
+        }
+
+        var puzzleManager = FindFirstObjectByType<PuzzleManager>();
+        if (puzzleManager != null)
+            puzzleManager.NotifyKeyRevealedFromClock(m_KeyObject);
+
+        m_KeyRevealedFromClock = true;
+        SetKeySpotlightEnabled(true);
+        Log($"Key revealed at worldPos={m_KeyRevealWorldAnchor} and spotlight enabled.");
+    }
+
+    void SetKeySpotlightEnabled(bool on)
+    {
+        if (!m_KeyRevealedFromClock && on) return;
+
+        if (m_KeySpot == null)
+        {
+            var go = new GameObject("ClockKeySpot");
+            go.transform.SetParent(null, true);
+            go.transform.position = m_KeySpotWorldAnchor;
+            go.transform.localRotation = Quaternion.identity;
+            m_KeySpot = go.AddComponent<Light>();
+            m_KeySpot.type = LightType.Spot;
+            m_KeySpot.color = m_KeySpotColor;
+            m_KeySpot.intensity = m_KeySpotIntensity;
+            m_KeySpot.range = m_KeySpotRange;
+            m_KeySpot.spotAngle = m_KeySpotAngle;
+            m_KeySpot.shadows = LightShadows.None;
+        }
+
+        m_KeySpot.transform.position = m_KeySpotWorldAnchor;
+
+        if (m_KeyObject != null)
+        {
+            Vector3 target = m_KeyObject.transform.position;
+            m_KeySpot.transform.rotation = Quaternion.LookRotation(target - m_KeySpot.transform.position, Vector3.up);
+        }
+
+        m_KeySpot.enabled = on;
     }
 }
